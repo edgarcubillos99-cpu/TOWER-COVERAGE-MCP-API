@@ -64,18 +64,30 @@ func runForCoord(ts *scraper.TowerScraper, dbClient *db.DBClient, lat, lon strin
 		return nil, err
 	}
 
-	var resultadosFinales []models.RespuestaMCP
+	var (
+		resultadosFinales []models.RespuestaMCP
+		mu                sync.Mutex
+		wg                sync.WaitGroup
+	)
 
 	for _, torre := range torres {
-		log.Printf("Buscando APs en BD para la torre encontrada: %s", torre.TowerName)
+		wg.Add(1)
+		go func(torre models.TowerCoverage) {
+			defer wg.Done()
 
-		aps, err := dbClient.ObtenerAPsPorTorre(torre.TowerName)
-		if err != nil {
-			log.Printf("Error BD con torre %s: %v", torre.TowerName, err)
-			continue
-		}
+			log.Printf("Buscando APs en BD para la torre encontrada: %s", torre.TowerName)
 
-		if len(aps) > 0 {
+			aps, err := dbClient.ObtenerAPsPorTorre(torre.TowerName)
+			if err != nil {
+				log.Printf("Error BD con torre %s: %v", torre.TowerName, err)
+				return
+			}
+
+			if len(aps) == 0 {
+				log.Printf("No hay APs configurados en DB para la torre %s", torre.TowerName)
+				return
+			}
+
 			log.Printf("Se encontraron %d APs en DB para %s. Entrando a verificar...", len(aps), torre.TowerName)
 
 			apsAnalizados, errTest := ts.TestAPCoverage(torre, aps, lat, lon)
@@ -83,11 +95,12 @@ func runForCoord(ts *scraper.TowerScraper, dbClient *db.DBClient, lat, lon strin
 				log.Printf("Fallo en la prueba de cobertura para %s: %v", torre.TowerName, errTest)
 			}
 
+			mu.Lock()
 			resultadosFinales = append(resultadosFinales, apsAnalizados...)
-		} else {
-			log.Printf("No hay APs configurados en DB para la torre %s", torre.TowerName)
-		}
+			mu.Unlock()
+		}(torre)
 	}
 
+	wg.Wait()
 	return resultadosFinales, nil
 }

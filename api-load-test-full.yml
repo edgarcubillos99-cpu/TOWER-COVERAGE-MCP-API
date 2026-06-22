@@ -1,0 +1,34 @@
+# Throughput de POST /api/coverage/full (endpoint más pesado).
+#
+# Uso:
+#   artillery run api-load-test-full.yml
+#
+# Cómo leer el summary:
+#   1. Busca la última fase donde vusers.failed ≈ 0 y error rate < 5%.
+#   2. Ese arrivalRate es tu req/s sostenible (con tu TOWER_COVERAGE_CONCURRENCY actual).
+#   3. Si falla ya en fase 2 (0.5 req/s), baja concurrencia no ayuda: revisa RAM/CPU o latencia TowerCoverage.
+#
+# Fórmula orientativa:
+#   req/s sostenible ≈ TOWER_COVERAGE_CONCURRENCY / p95(segundos)
+
+config:
+  target: "http://localhost:8080"
+  http:
+    timeout: 120
+
+  phases:
+    - duration: 120
+      arrivalRate: 1
+      name: "1. Calentamiento (1 req/s)"
+
+scenarios:
+  - name: "Cobertura Full"
+    flow:
+      - post:
+          url: "/api/coverage/full"
+          timeout: 120
+          json:
+            lat: "18.453518"
+            lon: "-66.736353"
+          expect:
+            - statusCode: 200

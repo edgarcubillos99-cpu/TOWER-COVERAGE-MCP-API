@@ -42,42 +42,55 @@ func (s *TowerScraper) StartSessionKeeper() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for range ticker.C {
-			s.pwMu.Lock()
-			s.loginMu.Lock()
 			age := time.Since(s.sessionStarted)
 			log.Printf("Keepalive: renovando sesión TowerCoverage (antigüedad %s)...", age.Round(time.Second))
-			if err := s.loginUnderLock(); err != nil {
+			if err := s.runPWExclusive(func() error {
+				s.loginMu.Lock()
+				defer s.loginMu.Unlock()
+				return s.loginUnderLock()
+			}); err != nil {
 				log.Printf("⚠️ Keepalive: fallo renovando sesión TowerCoverage: %v", err)
 			}
-			s.loginMu.Unlock()
-			s.pwMu.Unlock()
 		}
 	}()
 }
 
-func (s *TowerScraper) ensureSessionUnderPWLock() error {
+func (s *TowerScraper) ensureSession() error {
 	s.loginMu.Lock()
-	defer s.loginMu.Unlock()
-
-	if s.context == nil {
-		log.Println("Sin contexto de navegador; iniciando sesión TowerCoverage...")
-		return s.loginUnderLock()
-	}
-
+	needsLogin := s.context == nil
 	maxAge := sessionMaxAgeFromEnv()
-	if !s.sessionStarted.IsZero() && time.Since(s.sessionStarted) < maxAge {
+	needsRenew := !needsLogin && !s.sessionStarted.IsZero() && time.Since(s.sessionStarted) >= maxAge
+	s.loginMu.Unlock()
+
+	if !needsLogin && !needsRenew {
 		return nil
 	}
 
-	log.Printf("Sesión TowerCoverage antigua (%s); renovando antes de continuar...",
-		time.Since(s.sessionStarted).Round(time.Minute))
-	return s.loginUnderLock()
+	return s.runPWExclusive(func() error {
+		s.loginMu.Lock()
+		defer s.loginMu.Unlock()
+
+		if s.context == nil {
+			log.Println("Sin contexto de navegador; iniciando sesión TowerCoverage...")
+			return s.loginUnderLock()
+		}
+
+		if !s.sessionStarted.IsZero() && time.Since(s.sessionStarted) < maxAge {
+			return nil
+		}
+
+		log.Printf("Sesión TowerCoverage antigua (%s); renovando antes de continuar...",
+			time.Since(s.sessionStarted).Round(time.Minute))
+		return s.loginUnderLock()
+	})
 }
 
-func (s *TowerScraper) renewSessionUnderPWLock() error {
-	s.loginMu.Lock()
-	defer s.loginMu.Unlock()
-	return s.loginUnderLock()
+func (s *TowerScraper) renewSession() error {
+	return s.runPWExclusive(func() error {
+		s.loginMu.Lock()
+		defer s.loginMu.Unlock()
+		return s.loginUnderLock()
+	})
 }
 
 // loginUnderLock ejecuta el flujo de login. Requiere loginMu tomado por el llamador.

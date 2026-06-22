@@ -18,8 +18,8 @@ const googleMapsUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebK
 
 // ScreenshotGoogleMaps abre Google Maps en la coordenada indicada y devuelve un PNG en memoria.
 func (s *TowerScraper) ScreenshotGoogleMaps(lat, lon string) ([]byte, error) {
-	s.pwMu.Lock()
-	defer s.pwMu.Unlock()
+	s.acquirePWSlot()
+	defer s.releasePWSlot()
 
 	lat = strings.TrimSpace(lat)
 	lon = strings.TrimSpace(lon)

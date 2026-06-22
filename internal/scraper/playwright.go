@@ -31,9 +31,9 @@ type TowerScraper struct {
 	tcUser  string
 	tcPass  string
 	sessionStarted time.Time
-	// pwMu serializa el uso del BrowserContext entre peticiones HTTP/MCP concurrentes
-	// (varias pestañas en la misma request siguen en paralelo dentro de TestAPCoverage).
-	pwMu sync.Mutex
+	// pwLimit permite varias operaciones Playwright en paralelo (TOWER_COVERAGE_CONCURRENCY).
+	// runPWExclusive drena los slots para login/renovación de sesión.
+	pwLimit *pwLimiter
 	// loginMu protege login/renovación y el reemplazo del BrowserContext.
 	loginMu sync.Mutex
 }
@@ -55,41 +55,59 @@ func NewTowerScraper() (*TowerScraper, error) {
 		return nil, fmt.Errorf("no se pudo lanzar el navegador: %v", err)
 	}
 
+	conc := coverageConcurrencyFromEnv()
+	log.Printf("Consultas de cobertura: hasta %d operaciones Playwright en paralelo (TOWER_COVERAGE_CONCURRENCY)", conc)
+
 	return &TowerScraper{
 		pw:      pw,
 		browser: browser,
+		pwLimit: newPWLimiter(conc),
 	}, nil
+}
+
+func (s *TowerScraper) acquirePWSlot() {
+	s.pwLimit.acquire()
+}
+
+func (s *TowerScraper) releasePWSlot() {
+	s.pwLimit.release()
+}
+
+func (s *TowerScraper) runPWExclusive(fn func() error) error {
+	return s.pwLimit.runExclusive(fn)
 }
 
 // Login maneja la autenticación y guarda la sesión.
 func (s *TowerScraper) Login(username, password string) error {
 	s.tcUser = username
 	s.tcPass = password
-	s.pwMu.Lock()
-	defer s.pwMu.Unlock()
-	s.loginMu.Lock()
-	defer s.loginMu.Unlock()
 	log.Println("Iniciando proceso de Login...")
-	return s.loginUnderLock()
+	return s.runPWExclusive(func() error {
+		s.loginMu.Lock()
+		defer s.loginMu.Unlock()
+		return s.loginUnderLock()
+	})
 }
 
 // GetTowersData navega a la URL del mapa inyectando latitud y longitud.
 func (s *TowerScraper) GetTowersData(lat, lon string) ([]models.TowerCoverage, error) {
-	s.pwMu.Lock()
-	defer s.pwMu.Unlock()
-
-	if err := s.ensureSessionUnderPWLock(); err != nil {
+	if err := s.ensureSession(); err != nil {
 		return nil, fmt.Errorf("sesión TowerCoverage: %w", err)
 	}
 
+	s.acquirePWSlot()
 	results, sessionExpired, err := s.getTowersDataOnce(lat, lon)
+	s.releasePWSlot()
+
 	if sessionExpired || err != nil {
 		if sessionExpired || sessionExpiredOnPageError(err) {
 			log.Println("Sesión TowerCoverage inválida o expirada; renovando y reintentando...")
-			if renewErr := s.renewSessionUnderPWLock(); renewErr != nil {
+			if renewErr := s.renewSession(); renewErr != nil {
 				return nil, fmt.Errorf("renovación de sesión: %w", renewErr)
 			}
+			s.acquirePWSlot()
 			results, _, err = s.getTowersDataOnce(lat, lon)
+			s.releasePWSlot()
 		}
 	}
 	return results, err
@@ -281,11 +299,11 @@ func extractMiles(raw string) float64 {
 // TestAPCoverage navega a Coverages, busca la torre, entra en ella y simula la configuración de sus APs
 func (s *TowerScraper) TestAPCoverage(torre models.TowerCoverage, aps []db.APInfo, latCliente, lonCliente string) ([]models.RespuestaMCP, error) {
 	if !skipRFConeWebRender {
-		s.pwMu.Lock()
-		defer s.pwMu.Unlock()
-		if err := s.ensureSessionUnderPWLock(); err != nil {
+		if err := s.ensureSession(); err != nil {
 			return nil, fmt.Errorf("sesión TowerCoverage: %w", err)
 		}
+		s.acquirePWSlot()
+		defer s.releasePWSlot()
 	}
 
 	towerName := torre.TowerName
