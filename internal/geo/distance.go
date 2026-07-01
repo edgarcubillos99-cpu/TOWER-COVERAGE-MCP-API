@@ -51,6 +51,10 @@ func CalcularAngulo(lat1, lon1, lat2, lon2 float64) float64 {
 
 // EstaEnCobertura evalúa si el cliente está dentro del cono de la antena
 func EstaEnCobertura(azimutAP, bearingCliente, beamwidth float64) bool {
+	if beamwidth >= 360 {
+		return true
+	}
+
 	// Diferencia absoluta entre hacia donde mira la antena y donde está el cliente
 	diff := math.Abs(azimutAP - bearingCliente)
 

@@ -423,7 +423,7 @@ func (s *TowerScraper) processSingleAP(workerID int, towerURL, safeName string, 
 		NombreTorre: torre.TowerName,
 	}
 
-	beamwidth := geo.ObtenerApertura(ap.Tipo)
+	beamwidth := geo.ObtenerApertura(ap.Tipo, ap.APName)
 
 	var alignExtraido string
 	var statusExtraido string
@@ -572,10 +572,8 @@ func (s *TowerScraper) processSingleAP(workerID int, towerURL, safeName string, 
 	azimutFloat, azimutOK := geo.ParsearAzimut(ap.Azimut)
 	bearingCliente := geo.CalcularAngulo(latTorreFloat, lonTorreFloat, latClienteFloat, lonClienteFloat)
 
-	coberturaViable := false
-	if azimutOK {
-		coberturaViable = geo.EstaEnCobertura(azimutFloat, bearingCliente, beamwidth)
-	} else {
+	coberturaViable := geo.EstaEnCobertura(azimutFloat, bearingCliente, beamwidth)
+	if !coberturaViable && !azimutOK && beamwidth < 360 {
 		statusExtraido = strings.TrimSpace(statusExtraido + "; azimut no disponible — requiere verificación manual")
 	}
 

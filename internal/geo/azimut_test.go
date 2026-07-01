@@ -29,13 +29,28 @@ func TestParsearAzimut(t *testing.T) {
 }
 
 func TestObtenerApertura(t *testing.T) {
-	if got := ObtenerApertura("Ubiquiti Wave AP"); got != 30 {
+	if got := ObtenerApertura("Ubiquiti Wave AP", ""); got != 30 {
 		t.Fatalf("Wave: got %v", got)
 	}
-	if got := ObtenerApertura("WABE-60"); got != 30 {
+	if got := ObtenerApertura("WABE-60", ""); got != 30 {
 		t.Fatalf("Wabe: got %v", got)
 	}
-	if got := ObtenerApertura("AirMax AC"); got != 90 {
+	if got := ObtenerApertura("AirMax AC", ""); got != 90 {
 		t.Fatalf("default: got %v", got)
+	}
+	if got := ObtenerApertura("Rocket AC OMNI", ""); got != 360 {
+		t.Fatalf("OMNI en tipo: got %v", got)
+	}
+	if got := ObtenerApertura("ePMP3000", "OSNAP6-D ePMP3000 (OMNI)"); got != 360 {
+		t.Fatalf("OMNI en ap_name: got %v", got)
+	}
+	if got := ObtenerApertura("ePMP2000 OMNI", "OSNAP41-A"); got != 360 {
+		t.Fatalf("OMNI en tipo y ap_name: got %v", got)
+	}
+}
+
+func TestEstaEnCoberturaOmni(t *testing.T) {
+	if !EstaEnCobertura(0, 180, 360) {
+		t.Fatal("beamwidth 360 debe cubrir cualquier bearing")
 	}
 }
