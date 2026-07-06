@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -30,8 +31,9 @@ type Config struct {
 	Password  string
 	AppPort   string
 	MCPAPIKey string // Si no está vacía, /sse y /message exigen Authorization: Bearer <valor>
-	JWTSecret string // Secreto compartido con otras APIs de la empresa para firmar/validar JWT en /api/*
-	DBHost    string
+	JWTSecret       string // Secreto compartido con otras APIs de la empresa para firmar/validar JWT en /api/*
+	SwaggerEnabled  bool   // Si false, no se exponen /swagger/ ni /openapi.yaml
+	DBHost          string
 	DBPort    string // vacío se interpreta como 3306 en db.NewDBClient
 	DBUser    string
 	DBPass    string
@@ -59,8 +61,9 @@ func LoadConfig() *Config {
 		Password:  password,
 		AppPort:   appPort,
 		MCPAPIKey: os.Getenv("MCP_API_KEY"),
-		JWTSecret: os.Getenv("JWT_SECRET"),
-		DBHost:    dbHost,
+		JWTSecret:      os.Getenv("JWT_SECRET"),
+		SwaggerEnabled: envBool("SWAGGER_ENABLED", true),
+		DBHost:         dbHost,
 		DBPort:    dbPort,
 		DBUser:    dbUser,
 		DBPass:    dbPass,
@@ -74,4 +77,20 @@ func getEnvOrDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// envBool interpreta variables tipo SWAGGER_ENABLED (true/false, 1/0, yes/no, on/off).
+func envBool(key string, defaultVal bool) bool {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return defaultVal
+	}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on", "enabled":
+		return true
+	case "0", "false", "no", "off", "disabled":
+		return false
+	default:
+		return defaultVal
+	}
 }

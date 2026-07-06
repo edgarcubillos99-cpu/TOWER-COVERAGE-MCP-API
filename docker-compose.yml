@@ -19,6 +19,7 @@ services:
       - DB_PASS=${DB_PASS}
       - DB_HOST=${DB_HOST}
       - JWT_SECRET=${JWT_SECRET}
+      - SWAGGER_ENABLED=${SWAGGER_ENABLED:-true}
       - TOWER_COVERAGE_CONCURRENCY=${TOWER_COVERAGE_CONCURRENCY}
     extra_hosts:
       - "host.docker.internal:host-gateway"

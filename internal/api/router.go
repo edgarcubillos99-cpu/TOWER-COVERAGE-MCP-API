@@ -2,10 +2,10 @@ package api
 
 import "net/http"
 
-// Register monta los endpoints REST y la documentación Swagger en el mux por defecto.
+// Register monta los endpoints REST y, si swaggerEnabled, la documentación Swagger.
 // jwtSecret: si está definido, /api/* exige Authorization: Bearer <jwt> firmado con
 // ese secreto compartido entre las APIs de la empresa (HS256, con "exp" obligatorio).
-func Register(h *Handler, jwtSecret string) {
+func Register(h *Handler, jwtSecret string, swaggerEnabled bool) {
 	wrap := func(handler http.HandlerFunc) http.HandlerFunc {
 		return withCORS(withJWT(jwtSecret, handler))
 	}
@@ -14,5 +14,7 @@ func Register(h *Handler, jwtSecret string) {
 	http.HandleFunc("/api/dispositivos-ap", wrap(h.DispositivosAP))
 	http.HandleFunc("/api/torres", wrap(h.Torres))
 	http.HandleFunc("/api/snmp/status", wrap(h.SNMPStatus))
-	RegisterSwagger()
+	if swaggerEnabled {
+		RegisterSwagger()
+	}
 }

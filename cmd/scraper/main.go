@@ -145,8 +145,12 @@ func main() {
 				}
 				return toCoverageCoords(pairs), nil
 			},
-		}, cfg.JWTSecret)
-		log.Printf("📖 Documentación Swagger: http://localhost:%s/swagger/", cfg.AppPort)
+		}, cfg.JWTSecret, cfg.SwaggerEnabled)
+		if cfg.SwaggerEnabled {
+			log.Printf("📖 Documentación Swagger: http://localhost:%s/swagger/", cfg.AppPort)
+		} else {
+			log.Println("📖 Swagger deshabilitado (SWAGGER_ENABLED=false)")
+		}
 
 		addr := fmt.Sprintf(":%s", cfg.AppPort)
 		if err := http.ListenAndServe(addr, nil); err != nil {
