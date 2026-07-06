@@ -10,9 +10,10 @@ info:
     - **Cobertura completa**: mismo pipeline que la herramienta MCP `get_tower_coverage` (scraper + BD + SNMP).
     - **Dispositivos AP** y **Torres**: consultas de solo lectura a MySQL.
 
-    **Autenticación REST**: si `API_USERNAME` y `API_PASSWORD` están definidos en el servidor,
-    todos los endpoints `/api/*` exigen HTTP Basic Auth. Swagger (`/swagger/`) y MCP (`/sse`, `/message`)
-    no usan estas credenciales.
+    **Autenticación REST**: si `JWT_SECRET` está definido en el servidor,
+    todos los endpoints `/api/*` exigen `Authorization: Bearer <jwt>` (HS256, claim `exp` obligatorio).
+    En Swagger usa el botón **Authorize** e introduce solo el token (sin la palabra `Bearer`).
+    Swagger (`/swagger/`) y MCP (`/sse`, `/message`) no usan este JWT.
   version: 1.0.0
   contact:
     name: OSnet Wireless Team
@@ -37,7 +38,7 @@ paths:
   /api/coverage:
     post:
       security:
-        - basicAuth: []
+        - bearerAuth: []
       tags: [Cobertura]
       summary: Cobertura ligera (solo mapa)
       description: |
@@ -65,6 +66,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/TowerCoverage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           $ref: '#/components/responses/BadRequest'
         '405':
@@ -75,7 +78,7 @@ paths:
   /api/coverage/full:
     post:
       security:
-        - basicAuth: []
+        - bearerAuth: []
       tags: [Cobertura]
       summary: Cobertura completa (MCP get_tower_coverage)
       description: |
@@ -126,6 +129,8 @@ paths:
                     items:
                       $ref: '#/components/schemas/RespuestaCobertura'
                   - $ref: '#/components/schemas/CoverageBatchResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           $ref: '#/components/responses/BadRequest'
         '405':
@@ -136,7 +141,7 @@ paths:
   /api/dispositivos-ap:
     get:
       security:
-        - basicAuth: []
+        - bearerAuth: []
       tags: [Dispositivos AP]
       summary: Listar o filtrar dispositivos AP
       description: |
@@ -166,6 +171,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/DispositivoAP'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           $ref: '#/components/responses/BadRequest'
         '405':
@@ -174,7 +181,7 @@ paths:
   /api/torres:
     get:
       security:
-        - basicAuth: []
+        - bearerAuth: []
       tags: [Torres]
       summary: Listar o filtrar torres
       description: |
@@ -198,6 +205,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Torre'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           $ref: '#/components/responses/BadRequest'
         '405':
@@ -206,7 +215,7 @@ paths:
   /api/snmp/status:
     get:
       security:
-        - basicAuth: []
+        - bearerAuth: []
       tags: [SNMP]
       summary: Consulta SNMP de un AP
       description: |
@@ -245,6 +254,8 @@ paths:
                     clientes_conectados: 6
                     esta_saturado: false
                     estado_capacidad: Con espacio
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '400':
           $ref: '#/components/responses/BadRequest'
         '404':
@@ -266,10 +277,14 @@ paths:
 
 components:
   securitySchemes:
-    basicAuth:
+    bearerAuth:
       type: http
-      scheme: basic
-      description: Credenciales API_USERNAME / API_PASSWORD del servidor (solo /api/*)
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        JWT compartido entre las APIs de la empresa, firmado con HS256 usando
+        el secreto JWT_SECRET del servidor. Debe incluir el claim "exp".
+        En Authorize pega solo el token (Swagger añade "Bearer " automáticamente).
 
   parameters:
     DispositivoAPId:
@@ -359,6 +374,14 @@ components:
         example: "-66.7602"
 
   responses:
+    Unauthorized:
+      description: JWT ausente, inválido o caducado
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Unauthorized: JWT inválido, caducado o ausente"
     BadRequest:
       description: Petición inválida
       content:

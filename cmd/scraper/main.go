@@ -126,8 +126,8 @@ func main() {
 		if cfg.MCPAPIKey == "" {
 			log.Println("⚠️ MCP_API_KEY no definida: los endpoints /sse y /message aceptan conexiones sin autenticación")
 		}
-		if cfg.APIUser == "" || cfg.APIPass == "" {
-			log.Println("⚠️ API_USERNAME o API_PASSWORD no definidos: los endpoints /api/* aceptan peticiones sin Basic Auth")
+		if cfg.JWTSecret == "" {
+			log.Println("⚠️ JWT_SECRET no definida: los endpoints /api/* aceptan peticiones sin autenticación")
 		}
 
 		sseServer := server.NewSSEServer(mcpServer)
@@ -145,7 +145,7 @@ func main() {
 				}
 				return toCoverageCoords(pairs), nil
 			},
-		}, cfg.APIUser, cfg.APIPass)
+		}, cfg.JWTSecret)
 		log.Printf("📖 Documentación Swagger: http://localhost:%s/swagger/", cfg.AppPort)
 
 		addr := fmt.Sprintf(":%s", cfg.AppPort)

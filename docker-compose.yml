@@ -11,11 +11,14 @@ services:
       - MCP_TRANSPORT=${MCP_TRANSPORT:-sse}
       - APP_PORT=${APP_PORT}
       - MCP_API_KEY=${MCP_API_KEY}
-      - API_USERNAME=${API_USERNAME}
-      - API_PASSWORD=${API_PASSWORD}
       - TOWER_USERNAME=${TOWER_USERNAME}
       - TOWER_PASSWORD=${TOWER_PASSWORD}
       - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASS=${DB_PASS}
+      - DB_HOST=${DB_HOST}
+      - JWT_SECRET=${JWT_SECRET}
       - TOWER_COVERAGE_CONCURRENCY=${TOWER_COVERAGE_CONCURRENCY}
     extra_hosts:
       - "host.docker.internal:host-gateway"

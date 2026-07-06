@@ -38,6 +38,7 @@ const SwaggerHTML = `<!DOCTYPE html>
         layout: "StandaloneLayout",
         validatorUrl: null,
         tryItOutEnabled: true,
+        persistAuthorization: true,
       });
     };
   </script>
