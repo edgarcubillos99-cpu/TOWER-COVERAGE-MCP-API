@@ -9,12 +9,14 @@ import (
 	"sync"
 	"time"
 
+	"tower-scraper/internal/config"
 	"tower-scraper/internal/db"
 	"tower-scraper/internal/geo"
 	"tower-scraper/internal/models"
 	"tower-scraper/internal/snmp"
+	"tower-scraper/internal/towercoverage"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
 
 // skipRFConeWebRender evita la fase lenta de Playwright en EditCoverages (búsqueda de cliente,
@@ -25,44 +27,56 @@ const skipRFConeWebRender = true
 var reNumerosAzimutAltura = regexp.MustCompile(`[^\d.]`)
 
 type TowerScraper struct {
-	pw      *playwright.Playwright
-	browser playwright.Browser
-	context playwright.BrowserContext
-	tcUser  string
-	tcPass  string
+	pw             *playwright.Playwright
+	browser        playwright.Browser
+	context        playwright.BrowserContext
+	tcUser         string
+	tcPass         string
 	sessionStarted time.Time
-	// pwLimit permite varias operaciones Playwright en paralelo (TOWER_COVERAGE_CONCURRENCY).
-	// runPWExclusive drena los slots para login/renovación de sesión.
+	apiClient      *towercoverage.Client
+	browserMu      sync.Mutex
+	// pwLimit limita operaciones Playwright concurrentes (Google Maps, flujo legado web).
 	pwLimit *pwLimiter
 	// loginMu protege login/renovación y el reemplazo del BrowserContext.
 	loginMu sync.Mutex
 }
 
-// NewTowerScraper inicializa Playwright y el navegador.
-func NewTowerScraper() (*TowerScraper, error) {
-	pw, err := playwright.Run()
-	if err != nil {
-		log.Printf("[NewTowerScraper] fallo al iniciar Playwright: %v", err)
-		return nil, fmt.Errorf("no se pudo iniciar Playwright: %v", err)
+// NewTowerScraper prepara el cliente de cobertura vía API. Playwright se inicia bajo demanda
+// (p. ej. get_google_maps_screenshot); no hace falta en el arranque ni en el build Docker.
+func NewTowerScraper(cfg *config.Config) (*TowerScraper, error) {
+	conc := coverageConcurrencyFromEnv()
+	log.Printf("Consultas concurrentes: hasta %d (TOWER_COVERAGE_CONCURRENCY); cobertura vía API REST", conc)
+
+	return &TowerScraper{
+		pwLimit:   newPWLimiter(conc),
+		apiClient: towercoverage.NewClient(cfg.APIAccount, cfg.APIKey, cfg.MultiCoverageID),
+	}, nil
+}
+
+func (s *TowerScraper) ensureBrowser() error {
+	s.browserMu.Lock()
+	defer s.browserMu.Unlock()
+	if s.browser != nil {
+		return nil
 	}
 
-	// Usamos chromium en modo headless (false para ver el navegador)
+	pw, err := playwright.Run()
+	if err != nil {
+		return fmt.Errorf("playwright no disponible (instala Chromium con playwright install): %w", err)
+	}
+
 	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
 		Headless: playwright.Bool(true),
 	})
 	if err != nil {
-		log.Printf("[NewTowerScraper] fallo al lanzar Chromium: %v", err)
-		return nil, fmt.Errorf("no se pudo lanzar el navegador: %v", err)
+		pw.Stop()
+		return fmt.Errorf("no se pudo lanzar Chromium: %w", err)
 	}
 
-	conc := coverageConcurrencyFromEnv()
-	log.Printf("Consultas de cobertura: hasta %d operaciones Playwright en paralelo (TOWER_COVERAGE_CONCURRENCY)", conc)
-
-	return &TowerScraper{
-		pw:      pw,
-		browser: browser,
-		pwLimit: newPWLimiter(conc),
-	}, nil
+	s.pw = pw
+	s.browser = browser
+	log.Println("Playwright/Chromium inicializado bajo demanda.")
+	return nil
 }
 
 func (s *TowerScraper) acquirePWSlot() {
@@ -89,211 +103,10 @@ func (s *TowerScraper) Login(username, password string) error {
 	})
 }
 
-// GetTowersData navega a la URL del mapa inyectando latitud y longitud.
-func (s *TowerScraper) GetTowersData(lat, lon string) ([]models.TowerCoverage, error) {
-	if err := s.ensureSession(); err != nil {
-		return nil, fmt.Errorf("sesión TowerCoverage: %w", err)
-	}
-
-	s.acquirePWSlot()
-	results, sessionExpired, err := s.getTowersDataOnce(lat, lon)
-	s.releasePWSlot()
-
-	if sessionExpired || err != nil {
-		if sessionExpired || sessionExpiredOnPageError(err) {
-			log.Println("Sesión TowerCoverage inválida o expirada; renovando y reintentando...")
-			if renewErr := s.renewSession(); renewErr != nil {
-				return nil, fmt.Errorf("renovación de sesión: %w", renewErr)
-			}
-			s.acquirePWSlot()
-			results, _, err = s.getTowersDataOnce(lat, lon)
-			s.releasePWSlot()
-		}
-	}
-	return results, err
-}
-
-func (s *TowerScraper) getTowersDataOnce(lat, lon string) ([]models.TowerCoverage, bool, error) {
-	log.Printf("Consultando cobertura para Lat: %s, Lon: %s...", lat, lon)
-
-	page, err := s.context.NewPage()
-	if err != nil {
-		log.Printf("[GetTowersData] fallo al crear página: %v", err)
-		return nil, false, fmt.Errorf("error creando nueva página: %v", err)
-	}
-	defer page.Close()
-
-	targetURL := fmt.Sprintf("https://www.towercoverage.com/En-US/Dashboard/LinkPathResult/31710?Lat=%s&Lon=%s&cHgt=0", lat, lon)
-
-	if _, err = page.Goto(targetURL, playwright.PageGotoOptions{
-		Timeout: playwright.Float(60000),
-	}); err != nil {
-		log.Printf("[GetTowersData] fallo al navegar al mapa (Lat=%s Lon=%s): %v", lat, lon, err)
-		return nil, false, fmt.Errorf("error navegando al mapa de cobertura: %v", err)
-	}
-
-	if sessionExpiredOnPage(page) {
-		log.Printf("[GetTowersData] redirigido a login tras navegar al mapa (Lat=%s Lon=%s)", lat, lon)
-		return nil, true, nil
-	}
-
-	log.Println("URL alcanzada, esperando a que el mapa se inicialice...")
-
-	searchBox := page.Locator("input[placeholder*='Address']")
-	if err := searchBox.WaitFor(playwright.LocatorWaitForOptions{
-		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(45000),
-	}); err != nil {
-		if sessionExpiredOnPage(page) {
-			log.Printf("[GetTowersData] sesión expirada esperando el mapa (Lat=%s Lon=%s)", lat, lon)
-			return nil, true, nil
-		}
-		log.Printf("[GetTowersData] fallo esperando el buscador del mapa (input Address): %v", err)
-		_, _ = page.Screenshot(playwright.PageScreenshotOptions{Path: playwright.String("debug_mapa_failed.png")})
-		return nil, false, fmt.Errorf("la interfaz del mapa no cargó. Revisa debug_mapa_failed.png: %v", err)
-	}
-
-	page.WaitForTimeout(3000)
-	log.Println("Mapa cargado. Iniciando extracción de datos...")
-	results, err := s.ExtractCoverageData(page)
-	return results, false, err
-}
-
-func sessionExpiredOnPageError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "login") ||
-		strings.Contains(msg, "sesión") ||
-		strings.Contains(msg, "session")
-}
-
-// ExtractCoverageData itera sobre los resultados, extrae la información y filtra por distancia.
-func (s *TowerScraper) ExtractCoverageData(page playwright.Page) ([]models.TowerCoverage, error) {
-	var results []models.TowerCoverage
-
-	linkCards := page.Locator("#linkPanel .linkImg")
-
-	count, err := linkCards.Count()
-	if err != nil {
-		log.Printf("[ExtractCoverageData] fallo al contar tarjetas #linkPanel .linkImg: %v", err)
-		return nil, fmt.Errorf("error contando resultados: %v", err)
-	}
-
-	log.Printf("Se encontraron %d torres en los resultados. Procesando...", count)
-
-	for i := 0; i < count; i++ {
-		card := linkCards.Nth(i)
-
-		if err := card.Click(); err != nil {
-			log.Printf("[ExtractCoverageData] fallo al hacer clic en tarjeta %d: %v", i, err)
-			continue
-		}
-
-		page.WaitForTimeout(1500)
-
-		titleText, err := page.Locator("#linkResult tr.collapsible td").InnerText()
-		if err != nil {
-			log.Printf("[ExtractCoverageData] fallo al leer título de torre (tarjeta %d): %v", i, err)
-		}
-		towerName := cleanTowerName(titleText)
-
-		perfRow := page.Locator("#linkResult tr.deetRow").Filter(playwright.LocatorFilterOptions{
-			HasText: "PERFORMANCE",
-		}).Locator("table tr").First()
-
-		status, err := perfRow.Locator("td").Nth(0).InnerText()
-		if err != nil {
-			log.Printf("[ExtractCoverageData] fallo al leer PERFORMANCE status (tarjeta %d, torre %q): %v", i, towerName, err)
-		}
-		signal, err := perfRow.Locator("td").Nth(1).InnerText()
-		if err != nil {
-			log.Printf("[ExtractCoverageData] fallo al leer PERFORMANCE signal (tarjeta %d, torre %q): %v", i, towerName, err)
-		}
-		distanceRaw, err := perfRow.Locator("td").Nth(2).InnerText()
-		if err != nil {
-			log.Printf("[ExtractCoverageData] fallo al leer PERFORMANCE distance (tarjeta %d, torre %q): %v", i, towerName, err)
-		}
-
-		clientRow := page.Locator("#linkResult tr.deetRow").Filter(playwright.LocatorFilterOptions{
-			HasText: "CLIENT",
-		}).Locator("table tr").First()
-
-		alignmentRaw, err := clientRow.Locator("td").Nth(0).InnerText()
-		if err != nil {
-			log.Printf("[ExtractCoverageData] fallo al leer CLIENT alignment (tarjeta %d, torre %q): %v", i, towerName, err)
-		}
-		tiltRaw, err := clientRow.Locator("td").Nth(1).InnerText()
-		if err != nil {
-			log.Printf("[ExtractCoverageData] fallo al leer CLIENT tilt (tarjeta %d, torre %q): %v", i, towerName, err)
-		}
-
-		towerRow := page.Locator("#linkResult tr.deetRow").Filter(playwright.LocatorFilterOptions{
-			HasText: "TOWER",
-		}).Locator("table tr").First()
-
-		locationRaw, err := towerRow.Locator("td").Nth(0).InnerText()
-		if err != nil {
-			log.Printf("[ExtractCoverageData] fallo al leer TOWER location (tarjeta %d, torre %q): %v", i, towerName, err)
-		}
-		lat, lon := parseLocation(locationRaw)
-
-		milesFloat := extractMiles(distanceRaw)
-		cleanStatus := strings.TrimSpace(status)
-
-		if milesFloat > 0 && milesFloat <= 6.0 && cleanStatus == "Good Link" {
-			tower := models.TowerCoverage{
-				TowerName: towerName,
-				Latitude:  lat,
-				Longitude: lon,
-				Alignment: strings.TrimSpace(alignmentRaw),
-				Tilt:      strings.TrimSpace(tiltRaw),
-				Distance:  fmt.Sprintf("%.2f mi", milesFloat),
-				Signal:    strings.TrimSpace(signal),
-				Status:    cleanStatus,
-			}
-			results = append(results, tower)
-			log.Printf("✅ APROBADA: %s | Align: %s, Tilt: %s, Status: %s", towerName, tower.Alignment, tower.Tilt, tower.Status)
-		} else {
-			log.Printf("❌ DESCARTADA (> 6 mi o Status no ideal): %s (%.2f mi, %s)", towerName, milesFloat, cleanStatus)
-		}
-	}
-	return results, nil
-}
-
-func cleanTowerName(raw string) string {
-	raw = strings.ReplaceAll(raw, "\u00a0", " ")
-	parts := strings.Split(raw, "from ")
-	if len(parts) > 1 {
-		sub := strings.Split(parts[1], " to")
-		return strings.TrimSpace(sub[0])
-	}
-	return strings.TrimSpace(raw)
-}
-
-func parseLocation(raw string) (lat, lon string) {
-	raw = strings.TrimSpace(strings.ReplaceAll(raw, "\u00a0", " "))
-	re := regexp.MustCompile(`(-?\d+(?:\.\d+)?)\s*[,;/]\s*(-?\d+(?:\.\d+)?)`)
-	if m := re.FindStringSubmatch(raw); len(m) == 3 {
-		return m[1], m[2]
-	}
-	reNums := regexp.MustCompile(`-?\d+(?:\.\d+)?`)
-	parts := reNums.FindAllString(raw, 2)
-	if len(parts) == 2 {
-		return parts[0], parts[1]
-	}
-	return "", ""
-}
-
-func extractMiles(raw string) float64 {
-	re := regexp.MustCompile(`([\d\.]+)\s*mi`)
-	matches := re.FindStringSubmatch(raw)
-	if len(matches) > 1 {
-		val, _ := strconv.ParseFloat(matches[1], 64)
-		return val
-	}
-	return 0
+// GetTowersData consulta la API de TowerCoverage, cruza con la tabla torres y filtra por distancia.
+func (s *TowerScraper) GetTowersData(dbClient *db.DBClient, lat, lon string) ([]models.TowerCoverage, error) {
+	log.Printf("Consultando cobertura vía API para Lat: %s, Lon: %s...", lat, lon)
+	return towercoverage.ResolveTowers(dbClient, s.apiClient, lat, lon)
 }
 
 // TestAPCoverage navega a Coverages, busca la torre, entra en ella y simula la configuración de sus APs
@@ -891,6 +704,8 @@ func ensureAzimuthCommitted(page playwright.Page, workerID int, apName, want str
 
 // Close limpia los recursos al terminar la aplicación
 func (s *TowerScraper) Close() {
+	s.browserMu.Lock()
+	defer s.browserMu.Unlock()
 	if s.context != nil {
 		s.context.Close()
 	}

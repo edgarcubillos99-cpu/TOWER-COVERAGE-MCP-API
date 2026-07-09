@@ -3,6 +3,12 @@ package geo
 import "math"
 
 const radioTierraKm = 6371.0
+const kmPerMile = 1.609344
+
+// KmToMiles convierte kilómetros a millas.
+func KmToMiles(km float64) float64 {
+	return math.Round((km/kmPerMile)*100) / 100
+}
 
 // gradosARadianes convierte grados a radianes
 func gradosARadianes(grados float64) float64 {

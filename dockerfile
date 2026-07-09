@@ -1,39 +1,37 @@
-FROM ghcr.io/hybridgroup/opencv:4.10.0
+# Stage 1: cache modules
+FROM golang:1.24-bookworm AS modules
+COPY go.mod go.sum /modules/
+WORKDIR /modules
+RUN go mod download
+
+# Stage 2: build + playwright CLI
+FROM golang:1.24-bookworm AS builder
+COPY --from=modules /go/pkg /go/pkg
+COPY . /workdir
+WORKDIR /workdir
+
+RUN PWGO_VER=$(grep -oE "mxschmitt/playwright-go v[^ ]+" go.mod | awk '{print $2}') \
+    && go install "github.com/mxschmitt/playwright-go/cmd/playwright@${PWGO_VER}"
+
+RUN CGO_ENABLED=0 GOOS=linux go build -o /tower-scraper cmd/scraper/main.go
+
+# Stage 3: runtime con Chromium para Google Maps MCP
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+COPY --from=builder /go/bin/playwright /usr/local/bin/playwright
+COPY --from=builder /tower-scraper /usr/local/bin/tower-scraper
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# go.mod pide >= 1.24; la imagen OpenCV trae Go 1.23 → descargar toolchain automáticamente
-ENV GOTOOLCHAIN=auto
-
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
-
-RUN CGO_ENABLED=1 GOOS=linux go build -o /usr/local/bin/tower-scraper cmd/scraper/main.go
-
-# --- FIX: Actualizar llaves GPG de Debian Bullseye ---
-# Esto evita el error de "invalid signature" al hacer apt-get update
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update --allow-insecure-repositories || true \
-    && apt-get install -y --allow-unauthenticated debian-archive-keyring \
-    && apt-get update
-# -----------------------------------------------------
-
-# Solo Chromium (no Firefox/WebKit) + reintentos ante timeouts de apt en redes lentas.
-RUN set -eux; \
-    for attempt in 1 2 3 4 5; do \
-      apt-get update --fix-missing || true; \
-      if go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium; then \
-        exit 0; \
-      fi; \
-      echo "playwright install: reintento ${attempt}/5 en 30s..."; \
-      sleep 30; \
-    done; \
-    exit 1
-
-EXPOSE ${APP_PORT}
+EXPOSE 8080
 ENV MCP_TRANSPORT=sse
-ENV APP_PORT=${APP_PORT}
+ENV APP_PORT=8080
 
 CMD ["tower-scraper"]

@@ -68,3 +68,43 @@ func (c *DBClient) ListTorres(filters map[string]string) ([]models.TorreDB, erro
 	}
 	return out, rows.Err()
 }
+
+// ObtenerTorrePorNombre busca una torre por nombre exacto o sin prefijo OSN.
+func (c *DBClient) ObtenerTorrePorNombre(nombreTC string) (*models.TorreDB, error) {
+	nombreTC = strings.TrimSpace(nombreTC)
+	if nombreTC == "" {
+		return nil, fmt.Errorf("nombre de torre vacío")
+	}
+
+	candidates := []string{nombreTC}
+	if stripped := strings.TrimSpace(strings.TrimPrefix(nombreTC, "OSN.")); stripped != "" && stripped != nombreTC {
+		candidates = append(candidates, stripped)
+	}
+
+	seen := make(map[string]struct{})
+	for _, name := range candidates {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+
+		query := `SELECT id, nombre, latitud, longitud FROM torres WHERE nombre = ? LIMIT 1`
+		var t models.TorreDB
+		var lat, lon sql.NullString
+		err := c.conn.QueryRow(query, name).Scan(&t.ID, &t.Nombre, &lat, &lon)
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("error consultando torre %q: %w", name, err)
+		}
+		t.Latitud = nullStringValue(lat)
+		t.Longitud = nullStringValue(lon)
+		if strings.TrimSpace(t.Latitud) == "" || strings.TrimSpace(t.Longitud) == "" {
+			return nil, fmt.Errorf("torre %q sin coordenadas en BD", t.Nombre)
+		}
+		return &t, nil
+	}
+
+	return nil, fmt.Errorf("torre %q no encontrada en tabla torres", nombreTC)
+}

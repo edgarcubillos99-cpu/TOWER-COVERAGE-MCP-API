@@ -34,19 +34,12 @@ func main() {
 		log.Fatalf("Error inicializando DB: %v", err)
 	}
 
-	log.Println("Inicializando motor Headless...")
-	ts, err := scraper.NewTowerScraper()
+	log.Println("Inicializando servicio de cobertura (API TowerCoverage)...")
+	ts, err := scraper.NewTowerScraper(cfg)
 	if err != nil {
 		log.Fatalf("Error inicializando scraper: %v", err)
 	}
 	defer ts.Close()
-
-	log.Println("Ejecutando login en TowerCoverage...")
-	err = ts.Login(cfg.Username, cfg.Password)
-	if err != nil {
-		log.Fatalf("Error en el login: %v", err)
-	}
-	ts.StartSessionKeeper()
 
 	mcpServer := server.NewMCPServer("TowerCoverageService", "1.0.0")
 

@@ -59,7 +59,7 @@ func RunConsultas(ts *scraper.TowerScraper, dbClient *db.DBClient, coords []Coor
 }
 
 func runForCoord(ts *scraper.TowerScraper, dbClient *db.DBClient, lat, lon string) ([]models.RespuestaMCP, error) {
-	torres, err := ts.GetTowersData(lat, lon)
+	torres, err := ts.GetTowersData(dbClient, lat, lon)
 	if err != nil {
 		return nil, err
 	}

@@ -27,17 +27,20 @@ func firstEnv(keys ...string) string {
 }
 
 type Config struct {
-	Username  string
-	Password  string
-	AppPort   string
-	MCPAPIKey string // Si no está vacía, /sse y /message exigen Authorization: Bearer <valor>
+	Username        string
+	Password        string
+	APIAccount      string
+	APIKey          string
+	MultiCoverageID string
+	AppPort         string
+	MCPAPIKey       string // Si no está vacía, /sse y /message exigen Authorization: Bearer <valor>
 	JWTSecret       string // Secreto compartido con otras APIs de la empresa para firmar/validar JWT en /api/*
 	SwaggerEnabled  bool   // Si false, no se exponen /swagger/ ni /openapi.yaml
 	DBHost          string
-	DBPort    string // vacío se interpreta como 3306 en db.NewDBClient
-	DBUser    string
-	DBPass    string
-	DBName    string
+	DBPort          string // vacío se interpreta como 3306 en db.NewDBClient
+	DBUser          string
+	DBPass          string
+	DBName          string
 }
 
 func LoadConfig() *Config {
@@ -46,28 +49,34 @@ func LoadConfig() *Config {
 	appPort := getEnvOrDefault("APP_PORT", "8080")
 	username := os.Getenv("TOWER_USERNAME")
 	password := os.Getenv("TOWER_PASSWORD")
+	apiAccount := os.Getenv("TOWER_API_ACCOUNT")
+	apiKey := os.Getenv("TOWER_API_KEY")
+	multiCoverageID := getEnvOrDefault("TOWER_MULTICOVERAGE_ID", "31710")
 	dbHost := os.Getenv("DB_HOST")
 	dbPort := os.Getenv("DB_PORT")
 	dbUser := os.Getenv("DB_USER")
 	dbPass := firstEnv("DB_PASS", "DB_PASSWORD", "MYSQL_ROOT_PASSWORD")
 	dbName := os.Getenv("DB_NAME")
 
-	if username == "" || password == "" {
-		log.Fatal("Faltan credenciales TOWER_USERNAME o TOWER_PASSWORD en el entorno")
+	if apiAccount == "" || apiKey == "" {
+		log.Fatal("Faltan TOWER_API_ACCOUNT o TOWER_API_KEY en el entorno")
 	}
 
 	return &Config{
-		Username:  username,
-		Password:  password,
-		AppPort:   appPort,
-		MCPAPIKey: os.Getenv("MCP_API_KEY"),
-		JWTSecret:      os.Getenv("JWT_SECRET"),
-		SwaggerEnabled: envBool("SWAGGER_ENABLED", true),
-		DBHost:         dbHost,
-		DBPort:    dbPort,
-		DBUser:    dbUser,
-		DBPass:    dbPass,
-		DBName:    dbName,
+		Username:        username,
+		Password:        password,
+		APIAccount:      apiAccount,
+		APIKey:          apiKey,
+		MultiCoverageID: multiCoverageID,
+		AppPort:         appPort,
+		MCPAPIKey:       os.Getenv("MCP_API_KEY"),
+		JWTSecret:       os.Getenv("JWT_SECRET"),
+		SwaggerEnabled:  envBool("SWAGGER_ENABLED", true),
+		DBHost:          dbHost,
+		DBPort:          dbPort,
+		DBUser:          dbUser,
+		DBPass:          dbPass,
+		DBName:          dbName,
 	}
 }
 

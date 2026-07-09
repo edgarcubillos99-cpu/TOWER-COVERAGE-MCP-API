@@ -79,7 +79,7 @@ func (h *Handler) CoverageFull(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(payload)
 }
 
-// CoverageLight POST /api/coverage — solo torres del mapa TowerCoverage (sin BD/SNMP).
+// CoverageLight POST /api/coverage — torres aprobadas vía API TowerCoverage (sin BD/SNMP).
 func (h *Handler) CoverageLight(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		h.writeError(w, http.StatusMethodNotAllowed, "método no permitido; usa POST")
@@ -95,7 +95,7 @@ func (h *Handler) CoverageLight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	torres, err := h.Scraper.GetTowersData(reqBody.Lat, reqBody.Lon)
+	torres, err := h.Scraper.GetTowersData(h.DB, reqBody.Lat, reqBody.Lon)
 	if err != nil {
 		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("error obteniendo datos: %v", err))
 		return

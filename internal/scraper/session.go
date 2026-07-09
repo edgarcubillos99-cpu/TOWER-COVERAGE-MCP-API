@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
 
 const defaultSessionMaxAge = 4 * time.Hour
@@ -56,6 +56,10 @@ func (s *TowerScraper) StartSessionKeeper() {
 }
 
 func (s *TowerScraper) ensureSession() error {
+	if err := s.ensureBrowser(); err != nil {
+		return err
+	}
+
 	s.loginMu.Lock()
 	needsLogin := s.context == nil
 	maxAge := sessionMaxAgeFromEnv()
