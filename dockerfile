@@ -24,7 +24,7 @@ RUN apt-get update --allow-insecure-repositories || true \
 RUN set -eux; \
     for attempt in 1 2 3 4 5; do \
       apt-get update --fix-missing || true; \
-      if go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium; then \
+      if go run github.com/mxschmitt/playwright-go/cmd/playwright@v0.6100.0 install --with-deps chromium; then \
         exit 0; \
       fi; \
       echo "playwright install: reintento ${attempt}/5 en 30s..."; \

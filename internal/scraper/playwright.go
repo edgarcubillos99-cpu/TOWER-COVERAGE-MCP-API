@@ -14,7 +14,7 @@ import (
 	"tower-scraper/internal/models"
 	"tower-scraper/internal/snmp"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
 
 // skipRFConeWebRender evita la fase lenta de Playwright en EditCoverages (búsqueda de cliente,

@@ -8,10 +8,23 @@ import (
 	"strings"
 	"time"
 
-	"github.com/playwright-community/playwright-go"
+	"github.com/mxschmitt/playwright-go"
 )
 
 const defaultSessionMaxAge = 4 * time.Hour
+
+// TowerCoverage ha usado id="Username" y id="UserName" según versión del sitio.
+var loginUsernameSelectors = []string{"#Username", "#UserName"}
+
+// El botón de login pasó de input[type=submit] a button#signInBtn.
+var loginButtonSelectors = []string{
+	"#signInBtn",
+	`#loginForm button[type="submit"]`,
+	`button.tc-submit-btn`,
+	`input[type="submit"][value="Login"]`,
+}
+
+const loginFieldTimeoutMs = 15000
 
 func sessionMaxAgeFromEnv() time.Duration {
 	if v := strings.TrimSpace(os.Getenv("TOWER_SESSION_MAX_AGE_MINUTES")); v != "" {
@@ -119,22 +132,28 @@ func (s *TowerScraper) loginUnderLock() error {
 	defer page.Close()
 
 	loginURL := "https://www.towercoverage.com/Login"
-	if _, err = page.Goto(loginURL); err != nil {
+	if _, err = page.Goto(loginURL, playwright.PageGotoOptions{
+		Timeout: playwright.Float(60000),
+	}); err != nil {
 		log.Printf("[Login] fallo al navegar a la URL de login: %v", err)
 		return fmt.Errorf("error navegando al login: %v", err)
 	}
 
-	if err := page.Locator("#UserName").Fill(s.tcUser); err != nil {
+	if err := fillFirstLocator(page, loginUsernameSelectors, s.tcUser, "username"); err != nil {
 		log.Printf("[Login] fallo al rellenar usuario: %v", err)
-		return fmt.Errorf("error llenando username: %v", err)
+		_, _ = page.Screenshot(playwright.PageScreenshotOptions{
+			Path: playwright.String("error_login_username.png"),
+		})
+		return err
 	}
-	if err := page.Locator("#Password").Fill(s.tcPass); err != nil {
+	if err := page.Locator("#Password").Fill(s.tcPass, playwright.LocatorFillOptions{
+		Timeout: playwright.Float(loginFieldTimeoutMs),
+	}); err != nil {
 		log.Printf("[Login] fallo al rellenar contraseña: %v", err)
 		return fmt.Errorf("error llenando password: %v", err)
 	}
 
-	loginBtn := page.Locator(`input[type="submit"][value="Login"]`)
-	if err := loginBtn.Click(); err != nil {
+	if err := clickFirstLocator(page, loginButtonSelectors, "clic en botón Login"); err != nil {
 		log.Printf("[Login] fallo al hacer clic en el botón Login: %v", err)
 		_, _ = page.Screenshot(playwright.PageScreenshotOptions{
 			Path: playwright.String("error_login_click.png"),
@@ -168,11 +187,54 @@ func sessionExpiredOnPage(page playwright.Page) bool {
 	if strings.Contains(u, "/login") {
 		return true
 	}
-	loc := page.Locator("#UserName")
-	n, err := loc.Count()
-	if err != nil || n == 0 {
-		return false
+	return loginUsernameFieldVisible(page)
+}
+
+func fillFirstLocator(page playwright.Page, selectors []string, value, fieldName string) error {
+	var lastErr error
+	for _, sel := range selectors {
+		loc := page.Locator(sel)
+		fillErr := loc.Fill(value, playwright.LocatorFillOptions{
+			Timeout: playwright.Float(loginFieldTimeoutMs),
+		})
+		if fillErr == nil {
+			log.Printf("[Login] campo %s rellenado con selector %s", fieldName, sel)
+			return nil
+		}
+		lastErr = fillErr
+		log.Printf("[Login] selector %s no disponible para %s: %v", sel, fieldName, fillErr)
 	}
-	vis, err := loc.First().IsVisible()
-	return err == nil && vis
+	return fmt.Errorf("error llenando %s (probados %v): %v", fieldName, selectors, lastErr)
+}
+
+func clickFirstLocator(page playwright.Page, selectors []string, actionName string) error {
+	var lastErr error
+	for _, sel := range selectors {
+		loc := page.Locator(sel)
+		clickErr := loc.Click(playwright.LocatorClickOptions{
+			Timeout: playwright.Float(loginFieldTimeoutMs),
+		})
+		if clickErr == nil {
+			log.Printf("[Login] %s con selector %s", actionName, sel)
+			return nil
+		}
+		lastErr = clickErr
+		log.Printf("[Login] selector %s no disponible para %s: %v", sel, actionName, clickErr)
+	}
+	return fmt.Errorf("error en %s (probados %v): %v", actionName, selectors, lastErr)
+}
+
+func loginUsernameFieldVisible(page playwright.Page) bool {
+	for _, sel := range loginUsernameSelectors {
+		loc := page.Locator(sel)
+		n, err := loc.Count()
+		if err != nil || n == 0 {
+			continue
+		}
+		vis, err := loc.First().IsVisible()
+		if err == nil && vis {
+			return true
+		}
+	}
+	return false
 }
