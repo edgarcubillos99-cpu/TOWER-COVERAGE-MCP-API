@@ -113,8 +113,17 @@ func (s *TowerScraper) GetTowersData(lat, lon string) ([]models.TowerCoverage, e
 	return results, err
 }
 
+// getTowersDataOnce obtiene las torres directamente del endpoint JSON
+// (LinkPathResult?format=json) reutilizando las cookies de la sesión del login.
+// Ya no se navega al mapa ni se hace scraping del HTML.
 func (s *TowerScraper) getTowersDataOnce(lat, lon string) ([]models.TowerCoverage, bool, error) {
-	log.Printf("Consultando cobertura para Lat: %s, Lon: %s...", lat, lon)
+	return s.getTowersDataViaJSON(lat, lon)
+}
+
+// getTowersDataViaHTML es el flujo original de scraping del DOM del mapa. Ya NO se usa en el
+// camino normal; se conserva por si en el futuro hiciera falta como respaldo manual.
+func (s *TowerScraper) getTowersDataViaHTML(lat, lon string) ([]models.TowerCoverage, bool, error) {
+	log.Printf("Consultando cobertura (HTML) para Lat: %s, Lon: %s...", lat, lon)
 
 	page, err := s.context.NewPage()
 	if err != nil {
