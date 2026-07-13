@@ -3,15 +3,23 @@ package scraper
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 
 	"tower-scraper/internal/models"
-
-	"github.com/mxschmitt/playwright-go"
 )
+
+// towerCoverageBaseURL es el origen del sitio; se usa tanto para la petición JSON como para
+// exportar/aplicar las cookies de sesión en el cliente HTTP nativo.
+const towerCoverageBaseURL = "https://www.towercoverage.com"
+
+// jsonFetchUserAgent imita un navegador para que el endpoint responda igual que en el login.
+const jsonFetchUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
 // defaultLinkPathID es el identificador del sistema de radio en la URL
 // /Dashboard/LinkPathResult/<id>. Debe coincidir con el sistema que contiene las torres
@@ -67,43 +75,81 @@ func clientHeight() string {
 	return defaultClientHeight
 }
 
-// getTowersDataViaJSON consulta el endpoint LinkPathResult con format=json reutilizando
-// las cookies de la sesión (el APIRequestContext del BrowserContext las inyecta
-// automáticamente en la petición). Devuelve (torres, sesiónExpirada, error).
-func (s *TowerScraper) getTowersDataViaJSON(lat, lon string) ([]models.TowerCoverage, bool, error) {
+// syncCookiesToHTTPClient exporta las cookies del contexto de Playwright (obtenidas en el
+// login) al cookie jar del cliente HTTP nativo. Se llama tras cada login/renovación para que
+// las consultas JSON viajen autenticadas sin usar el navegador.
+func (s *TowerScraper) syncCookiesToHTTPClient() error {
 	if s.context == nil {
+		return fmt.Errorf("sin contexto de navegador para exportar cookies")
+	}
+	if s.httpClient == nil || s.httpClient.Jar == nil {
+		return fmt.Errorf("cliente HTTP sin cookie jar")
+	}
+
+	cookies, err := s.context.Cookies(towerCoverageBaseURL)
+	if err != nil {
+		return fmt.Errorf("error exportando cookies del login: %w", err)
+	}
+
+	u, err := url.Parse(towerCoverageBaseURL)
+	if err != nil {
+		return err
+	}
+
+	httpCookies := make([]*http.Cookie, 0, len(cookies))
+	for _, c := range cookies {
+		httpCookies = append(httpCookies, &http.Cookie{
+			Name:     c.Name,
+			Value:    c.Value,
+			Domain:   c.Domain,
+			Path:     c.Path,
+			Secure:   c.Secure,
+			HttpOnly: c.HttpOnly,
+		})
+	}
+
+	s.httpClient.Jar.SetCookies(u, httpCookies)
+	log.Printf("Cookies de sesión sincronizadas al cliente HTTP (%d cookies).", len(httpCookies))
+	return nil
+}
+
+// getTowersDataViaJSON consulta el endpoint LinkPathResult con format=json usando el cliente
+// HTTP nativo con las cookies de la sesión. Devuelve (torres, sesiónExpirada, error).
+func (s *TowerScraper) getTowersDataViaJSON(lat, lon string) ([]models.TowerCoverage, bool, error) {
+	if s.httpClient == nil {
 		return nil, true, nil
 	}
 
-	url := fmt.Sprintf(
-		"https://www.towercoverage.com/En-US/Dashboard/LinkPathResult/%s?format=json&Lat=%s&Lon=%s&cHgt=%s",
-		linkPathID(), lat, lon, clientHeight(),
+	reqURL := fmt.Sprintf(
+		"%s/En-US/Dashboard/LinkPathResult/%s?format=json&Lat=%s&Lon=%s&cHgt=%s",
+		towerCoverageBaseURL, linkPathID(), lat, lon, clientHeight(),
 	)
-	log.Printf("Consultando cobertura (JSON) para Lat=%s Lon=%s -> %s", lat, lon, url)
+	log.Printf("Consultando cobertura (JSON) para Lat=%s Lon=%s -> %s", lat, lon, reqURL)
 
-	// Request() comparte el estado de cookies del contexto del navegador (login).
-	resp, err := s.context.Request().Get(url, playwright.APIRequestContextGetOptions{
-		Timeout: playwright.Float(60000),
-		Headers: map[string]string{
-			"Accept":           "application/json, text/plain, */*",
-			"X-Requested-With": "XMLHttpRequest",
-		},
-	})
+	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("error creando petición LinkPathResult JSON: %w", err)
+	}
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("User-Agent", jsonFetchUserAgent)
+
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, false, fmt.Errorf("error solicitando LinkPathResult JSON: %w", err)
 	}
-	defer resp.Dispose()
+	defer resp.Body.Close()
 
-	body, err := resp.Body()
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, false, fmt.Errorf("error leyendo cuerpo de LinkPathResult JSON: %w", err)
 	}
 
 	// Si la sesión expiró, el sitio responde (tras redirección) con el HTML del login.
-	ct := strings.ToLower(headerValue(resp.Headers(), "content-type"))
-	if !resp.Ok() || strings.Contains(ct, "text/html") || looksLikeLoginHTML(body) {
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || strings.Contains(ct, "text/html") || looksLikeLoginHTML(body) {
 		log.Printf("[GetTowersData JSON] respuesta no-JSON (status=%d, content-type=%q); probable sesión expirada",
-			resp.Status(), ct)
+			resp.StatusCode, ct)
 		return nil, true, nil
 	}
 
@@ -172,16 +218,6 @@ func statusIsGood(status string) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(status), "good")
-}
-
-func headerValue(headers map[string]string, name string) string {
-	name = strings.ToLower(name)
-	for k, v := range headers {
-		if strings.ToLower(k) == name {
-			return v
-		}
-	}
-	return ""
 }
 
 func looksLikeLoginHTML(body []byte) bool {

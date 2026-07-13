@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -38,6 +39,11 @@ type Config struct {
 	DBUser    string
 	DBPass    string
 	DBName    string
+	// Redis: si RedisAddr está vacío, la caché queda deshabilitada y todo consulta MySQL.
+	RedisAddr       string
+	RedisPassword   string
+	RedisDB         int
+	RedisTTLMinutes int // 0 = sin expiración (la caché vive hasta el próximo arranque/warm)
 }
 
 func LoadConfig() *Config {
@@ -68,7 +74,24 @@ func LoadConfig() *Config {
 		DBUser:    dbUser,
 		DBPass:    dbPass,
 		DBName:    dbName,
+		RedisAddr:       os.Getenv("REDIS_ADDR"),
+		RedisPassword:   firstEnv("REDIS_PASSWORD", "REDIS_PASS"),
+		RedisDB:         envInt("REDIS_DB", 0),
+		RedisTTLMinutes: envInt("REDIS_TTL_MINUTES", 0),
 	}
+}
+
+// envInt lee una variable entera; si falta o es inválida devuelve el valor por defecto.
+func envInt(key string, defaultVal int) int {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return defaultVal
+	}
+	return n
 }
 
 // Función auxiliar para mantener limpio el código

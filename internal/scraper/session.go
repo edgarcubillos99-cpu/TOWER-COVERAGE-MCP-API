@@ -178,6 +178,11 @@ func (s *TowerScraper) loginUnderLock() error {
 	}
 
 	s.sessionStarted = time.Now()
+	// Exportamos las cookies recién obtenidas al cliente HTTP nativo para que las consultas
+	// JSON no dependan del navegador. Si falla, se registra pero no aborta el login.
+	if err := s.syncCookiesToHTTPClient(); err != nil {
+		log.Printf("[Login] advertencia sincronizando cookies al cliente HTTP: %v", err)
+	}
 	log.Println("Login exitoso. Sesión guardada en el contexto.")
 	return nil
 }

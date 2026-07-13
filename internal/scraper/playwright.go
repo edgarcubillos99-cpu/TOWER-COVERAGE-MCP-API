@@ -3,6 +3,8 @@ package scraper
 import (
 	"fmt"
 	"log"
+	"net/http"
+	"net/http/cookiejar"
 	"regexp"
 	"strconv"
 	"strings"
@@ -36,6 +38,10 @@ type TowerScraper struct {
 	pwLimit *pwLimiter
 	// loginMu protege login/renovación y el reemplazo del BrowserContext.
 	loginMu sync.Mutex
+	// httpClient consulta el endpoint JSON (LinkPathResult) reutilizando las cookies del
+	// login SIN pasar por el driver de Playwright: menos latencia por petición, keep-alive
+	// de conexiones y sin ocupar slots de Playwright. Es seguro para uso concurrente.
+	httpClient *http.Client
 }
 
 // NewTowerScraper inicializa Playwright y el navegador.
@@ -58,10 +64,26 @@ func NewTowerScraper() (*TowerScraper, error) {
 	conc := coverageConcurrencyFromEnv()
 	log.Printf("Consultas de cobertura: hasta %d operaciones Playwright en paralelo (TOWER_COVERAGE_CONCURRENCY)", conc)
 
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, fmt.Errorf("no se pudo crear el cookie jar HTTP: %v", err)
+	}
+	httpClient := &http.Client{
+		Jar:     jar,
+		Timeout: 60 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 20,
+			IdleConnTimeout:     90 * time.Second,
+			ForceAttemptHTTP2:   true,
+		},
+	}
+
 	return &TowerScraper{
-		pw:      pw,
-		browser: browser,
-		pwLimit: newPWLimiter(conc),
+		pw:         pw,
+		browser:    browser,
+		pwLimit:    newPWLimiter(conc),
+		httpClient: httpClient,
 	}, nil
 }
 
@@ -89,15 +111,15 @@ func (s *TowerScraper) Login(username, password string) error {
 	})
 }
 
-// GetTowersData navega a la URL del mapa inyectando latitud y longitud.
+// GetTowersData obtiene las torres consultando el endpoint JSON con el cliente HTTP nativo
+// (reutiliza las cookies del login). Como ya no usa el navegador, NO ocupa slots de Playwright,
+// lo que permite consultar varias coordenadas en paralelo sin el límite TOWER_COVERAGE_CONCURRENCY.
 func (s *TowerScraper) GetTowersData(lat, lon string) ([]models.TowerCoverage, error) {
 	if err := s.ensureSession(); err != nil {
 		return nil, fmt.Errorf("sesión TowerCoverage: %w", err)
 	}
 
-	s.acquirePWSlot()
 	results, sessionExpired, err := s.getTowersDataOnce(lat, lon)
-	s.releasePWSlot()
 
 	if sessionExpired || err != nil {
 		if sessionExpired || sessionExpiredOnPageError(err) {
@@ -105,9 +127,7 @@ func (s *TowerScraper) GetTowersData(lat, lon string) ([]models.TowerCoverage, e
 			if renewErr := s.renewSession(); renewErr != nil {
 				return nil, fmt.Errorf("renovación de sesión: %w", renewErr)
 			}
-			s.acquirePWSlot()
 			results, _, err = s.getTowersDataOnce(lat, lon)
-			s.releasePWSlot()
 		}
 	}
 	return results, err

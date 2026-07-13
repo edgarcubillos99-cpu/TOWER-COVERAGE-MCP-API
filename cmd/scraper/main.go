@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -32,6 +33,25 @@ func main() {
 	dbClient, err := db.NewDBClient(cfg)
 	if err != nil {
 		log.Fatalf("Error inicializando DB: %v", err)
+	}
+
+	// Caché en Redis: tras conectar a MySQL, precargamos todas las torres y sus APs para que
+	// las consultas de cobertura lean de Redis en vez de MySQL. Si Redis no está disponible,
+	// InitRedis avisa y el sistema sigue funcionando solo con MySQL.
+	if err := dbClient.InitRedis(cfg); err != nil {
+		log.Printf("⚠️ Inicializando Redis: %v", err)
+	}
+	if dbClient.CacheEnabled() {
+		defer func() { _ = dbClient.Close() }()
+		log.Println("Precargando torres y APs en Redis...")
+		ctxWarm, cancelWarm := context.WithTimeout(context.Background(), 60*time.Second)
+		torresCache, apsCache, warmErr := dbClient.WarmCache(ctxWarm)
+		cancelWarm()
+		if warmErr != nil {
+			log.Printf("⚠️ Falló la precarga en Redis: %v. Las consultas caerán a MySQL bajo demanda.", warmErr)
+		} else {
+			log.Printf("✅ Caché lista: %d torres con APs precargadas (%d APs en total).", torresCache, apsCache)
+		}
 	}
 
 	log.Println("Inicializando motor Headless...")
