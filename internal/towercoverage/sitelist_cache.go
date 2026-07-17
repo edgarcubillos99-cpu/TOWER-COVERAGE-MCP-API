@@ -10,16 +10,27 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const siteListRedisKey = "towercoverage:sitelist"
+const (
+	siteListRedisKey   = "towercoverage:sitelist"
+	siteListVersionKey = "towercoverage:sitelist:version"
+	// siteListCacheVersion: subir cuando cambie el contenido cacheado (p. ej. enriquecimiento).
+	// v2 = height tomado de GetCoverageList.antennaheight.
+	siteListCacheVersion = "2"
+)
 
 // SiteListStore cachea el resultado de GetSiteList en Redis.
 type SiteListStore struct {
-	rdb *redis.Client
-	key string
+	rdb        *redis.Client
+	key        string
+	versionKey string
 }
 
 func NewSiteListStore(rdb *redis.Client) *SiteListStore {
-	return &SiteListStore{rdb: rdb, key: siteListRedisKey}
+	return &SiteListStore{
+		rdb:        rdb,
+		key:        siteListRedisKey,
+		versionKey: siteListVersionKey,
+	}
 }
 
 func (s *SiteListStore) Get(ctx context.Context) ([]Site, error) {
@@ -40,6 +51,21 @@ func (s *SiteListStore) Get(ctx context.Context) ([]Site, error) {
 	return sites, nil
 }
 
+// IsCurrent indica si el cache tiene la versión esperada por el código.
+func (s *SiteListStore) IsCurrent(ctx context.Context) (bool, error) {
+	if s == nil || s.rdb == nil {
+		return false, fmt.Errorf("store Redis no configurado")
+	}
+	v, err := s.rdb.Get(ctx, s.versionKey).Result()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("leyendo versión sitelist: %w", err)
+	}
+	return v == siteListCacheVersion, nil
+}
+
 func (s *SiteListStore) Set(ctx context.Context, sites []Site) error {
 	if s == nil || s.rdb == nil {
 		return fmt.Errorf("store Redis no configurado")
@@ -49,25 +75,63 @@ func (s *SiteListStore) Set(ctx context.Context, sites []Site) error {
 		return fmt.Errorf("serializando sitelist: %w", err)
 	}
 	// Sin TTL: la caducidad la controla el refresco semanal (domingos).
-	if err := s.rdb.Set(ctx, s.key, raw, 0).Err(); err != nil {
+	pipe := s.rdb.TxPipeline()
+	pipe.Set(ctx, s.key, raw, 0)
+	pipe.Set(ctx, s.versionKey, siteListCacheVersion, 0)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("guardando sitelist en Redis: %w", err)
 	}
 	return nil
 }
 
-// GetSites devuelve el listado desde Redis si existe; si no, llama a la API y lo cachea.
+// fetchSitesEnriched obtiene GetSiteList, aplica antennaheight de GetCoverageList
+// y devuelve el listado listo para cachear o usar.
+func (c *Client) fetchSitesEnriched() ([]Site, error) {
+	sites, err := c.FetchSiteList()
+	if err != nil {
+		return nil, err
+	}
+	coverages, err := c.FetchCoverageList()
+	if err != nil {
+		return nil, fmt.Errorf("GetCoverageList: %w", err)
+	}
+	n := applyCoverageAntennaHeights(sites, coverages)
+	log.Printf("GetCoverageList: %d coberturas; height actualizado en %d sitios", len(coverages), n)
+	return sites, nil
+}
+
+func (c *Client) cacheHit(ctx context.Context) ([]Site, bool) {
+	if c.SiteStore == nil {
+		return nil, false
+	}
+	current, err := c.SiteStore.IsCurrent(ctx)
+	if err != nil {
+		log.Printf("⚠️ Redis sitelist versión: %v — se consultará la API", err)
+		return nil, false
+	}
+	if !current {
+		return nil, false
+	}
+	sites, err := c.SiteStore.Get(ctx)
+	if err != nil {
+		log.Printf("⚠️ Redis sitelist: %v — se consultará la API", err)
+		return nil, false
+	}
+	if len(sites) == 0 {
+		return nil, false
+	}
+	return sites, true
+}
+
+// GetSites devuelve el listado desde Redis si existe y está actualizado;
+// si no, llama a la API (sites + coverages) y lo cachea.
 func (c *Client) GetSites(ctx context.Context) ([]Site, error) {
-	if c.SiteStore != nil {
-		sites, err := c.SiteStore.Get(ctx)
-		if err != nil {
-			log.Printf("⚠️ Redis sitelist: %v — se consultará la API", err)
-		} else if len(sites) > 0 {
-			log.Printf("GetSiteList desde Redis (%d sitios)", len(sites))
-			return sites, nil
-		}
+	if sites, ok := c.cacheHit(ctx); ok {
+		log.Printf("GetSiteList desde Redis (%d sitios)", len(sites))
+		return sites, nil
 	}
 
-	sites, err := c.FetchSiteList()
+	sites, err := c.fetchSitesEnriched()
 	if err != nil {
 		return nil, err
 	}
@@ -75,15 +139,15 @@ func (c *Client) GetSites(ctx context.Context) ([]Site, error) {
 		if err := c.SiteStore.Set(ctx, sites); err != nil {
 			log.Printf("⚠️ No se pudo cachear sitelist en Redis: %v", err)
 		} else {
-			log.Printf("GetSiteList cacheado en Redis (%d sitios)", len(sites))
+			log.Printf("GetSiteList cacheado en Redis (%d sitios, v%s)", len(sites), siteListCacheVersion)
 		}
 	}
 	return sites, nil
 }
 
-// RefreshSiteList fuerza un GetSiteList a la API y actualiza Redis.
+// RefreshSiteList fuerza GetSiteList + GetCoverageList a la API y actualiza Redis.
 func (c *Client) RefreshSiteList(ctx context.Context) error {
-	sites, err := c.FetchSiteList()
+	sites, err := c.fetchSitesEnriched()
 	if err != nil {
 		return err
 	}
@@ -93,24 +157,28 @@ func (c *Client) RefreshSiteList(ctx context.Context) error {
 	if err := c.SiteStore.Set(ctx, sites); err != nil {
 		return err
 	}
-	log.Printf("GetSiteList refrescado en Redis (%d sitios)", len(sites))
+	log.Printf("GetSiteList refrescado en Redis (%d sitios, v%s)", len(sites), siteListCacheVersion)
 	return nil
 }
 
-// EnsureSiteListCache rellena Redis si está vacío (arranque del servicio).
+// EnsureSiteListCache rellena Redis si está vacío o con versión antigua (arranque).
 func (c *Client) EnsureSiteListCache(ctx context.Context) error {
 	if c.SiteStore == nil {
 		return nil
 	}
-	sites, err := c.SiteStore.Get(ctx)
+	if sites, ok := c.cacheHit(ctx); ok {
+		log.Printf("Redis ya tiene sitelist actualizado (%d sitios, v%s)", len(sites), siteListCacheVersion)
+		return nil
+	}
+	current, err := c.SiteStore.IsCurrent(ctx)
 	if err != nil {
 		return err
 	}
-	if len(sites) > 0 {
-		log.Printf("Redis ya tiene sitelist (%d sitios); no se llama a GetSiteList", len(sites))
-		return nil
+	if !current {
+		log.Printf("Redis sitelist desactualizado o sin versión (esperada v%s); refrescando con GetSiteList + GetCoverageList...", siteListCacheVersion)
+	} else {
+		log.Println("Redis sin sitelist; obteniendo GetSiteList + GetCoverageList de la API...")
 	}
-	log.Println("Redis sin sitelist; obteniendo GetSiteList de la API...")
 	return c.RefreshSiteList(ctx)
 }
 
