@@ -41,6 +41,13 @@ func main() {
 	}
 	defer ts.Close()
 
+	siteCtx, siteCancel := context.WithCancel(context.Background())
+	defer siteCancel()
+	if err := ts.APIClient().EnsureSiteListCache(siteCtx); err != nil {
+		log.Fatalf("Error preparando cache GetSiteList en Redis: %v", err)
+	}
+	ts.APIClient().StartSundaySiteListRefresh(siteCtx)
+
 	mcpServer := server.NewMCPServer("TowerCoverageService", "1.0.0")
 
 	tool := mcp.NewTool("get_tower_coverage",

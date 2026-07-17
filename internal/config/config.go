@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -27,20 +28,22 @@ func firstEnv(keys ...string) string {
 }
 
 type Config struct {
-	Username        string
-	Password        string
-	APIAccount      string
-	APIKey          string
-	MultiCoverageID string
-	AppPort         string
-	MCPAPIKey       string // Si no está vacía, /sse y /message exigen Authorization: Bearer <valor>
-	JWTSecret       string // Secreto compartido con otras APIs de la empresa para firmar/validar JWT en /api/*
-	SwaggerEnabled  bool   // Si false, no se exponen /swagger/ ni /openapi.yaml
-	DBHost          string
-	DBPort          string // vacío se interpreta como 3306 en db.NewDBClient
-	DBUser          string
-	DBPass          string
-	DBName          string
+	Username       string
+	Password       string
+	APIAccount     string
+	APIKey         string
+	AppPort        string
+	MCPAPIKey      string // Si no está vacía, /sse y /message exigen Authorization: Bearer <valor>
+	JWTSecret      string // Secreto compartido con otras APIs de la empresa para firmar/validar JWT en /api/*
+	SwaggerEnabled bool   // Si false, no se exponen /swagger/ ni /openapi.yaml
+	DBHost         string
+	DBPort         string // vacío se interpreta como 3306 en db.NewDBClient
+	DBUser         string
+	DBPass         string
+	DBName         string
+	RedisAddr      string // host:port (p. ej. redis:6379 en Docker)
+	RedisPassword  string
+	RedisDB        int
 }
 
 func LoadConfig() *Config {
@@ -51,32 +54,41 @@ func LoadConfig() *Config {
 	password := os.Getenv("TOWER_PASSWORD")
 	apiAccount := os.Getenv("TOWER_API_ACCOUNT")
 	apiKey := os.Getenv("TOWER_API_KEY")
-	multiCoverageID := getEnvOrDefault("TOWER_MULTICOVERAGE_ID", "31710")
 	dbHost := os.Getenv("DB_HOST")
 	dbPort := os.Getenv("DB_PORT")
 	dbUser := os.Getenv("DB_USER")
 	dbPass := firstEnv("DB_PASS", "DB_PASSWORD", "MYSQL_ROOT_PASSWORD")
 	dbName := os.Getenv("DB_NAME")
+	redisAddr := getEnvOrDefault("REDIS_ADDR", "redis:6379")
+	redisPassword := os.Getenv("REDIS_PASSWORD")
+	redisDB := 0
+	if v := strings.TrimSpace(os.Getenv("REDIS_DB")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			redisDB = n
+		}
+	}
 
 	if apiAccount == "" || apiKey == "" {
 		log.Fatal("Faltan TOWER_API_ACCOUNT o TOWER_API_KEY en el entorno")
 	}
 
 	return &Config{
-		Username:        username,
-		Password:        password,
-		APIAccount:      apiAccount,
-		APIKey:          apiKey,
-		MultiCoverageID: multiCoverageID,
-		AppPort:         appPort,
-		MCPAPIKey:       os.Getenv("MCP_API_KEY"),
-		JWTSecret:       os.Getenv("JWT_SECRET"),
-		SwaggerEnabled:  envBool("SWAGGER_ENABLED", true),
-		DBHost:          dbHost,
-		DBPort:          dbPort,
-		DBUser:          dbUser,
-		DBPass:          dbPass,
-		DBName:          dbName,
+		Username:       username,
+		Password:       password,
+		APIAccount:     apiAccount,
+		APIKey:         apiKey,
+		AppPort:        appPort,
+		MCPAPIKey:      os.Getenv("MCP_API_KEY"),
+		JWTSecret:      os.Getenv("JWT_SECRET"),
+		SwaggerEnabled: envBool("SWAGGER_ENABLED", true),
+		DBHost:         dbHost,
+		DBPort:         dbPort,
+		DBUser:         dbUser,
+		DBPass:         dbPass,
+		DBName:         dbName,
+		RedisAddr:      redisAddr,
+		RedisPassword:  redisPassword,
+		RedisDB:        redisDB,
 	}
 }
 

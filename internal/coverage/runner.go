@@ -5,6 +5,7 @@ import (
 	"log"
 	"sync"
 
+	"tower-scraper/internal/concurrency"
 	"tower-scraper/internal/db"
 	"tower-scraper/internal/models"
 	"tower-scraper/internal/scraper"
@@ -35,12 +36,17 @@ func RunConsultas(ts *scraper.TowerScraper, dbClient *db.DBClient, coords []Coor
 		return json.MarshalIndent(res, "", "  ")
 	}
 
+	limit := concurrency.FromEnv()
+	sem := make(chan struct{}, limit)
 	out := make([]consultaBloque, len(coords))
 	var wg sync.WaitGroup
 	for i, c := range coords {
 		wg.Add(1)
 		go func(i int, lat, lon string) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
 			res, err := runForCoord(ts, dbClient, lat, lon)
 			out[i].Lat, out[i].Lon = lat, lon
 			if err != nil {

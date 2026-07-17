@@ -1,8 +1,27 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: tower-redis
+    restart: always
+    networks:
+      - tower-net
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    # Sin ports: no se publica en el host; solo accesible desde la red Docker.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   scraper:
     build: .
     container_name: tower-scraper
     restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
     ports:
       - "${APP_PORT}:${APP_PORT}"
     env_file:
@@ -13,7 +32,6 @@ services:
       - MCP_API_KEY=${MCP_API_KEY}
       - TOWER_API_ACCOUNT=${TOWER_API_ACCOUNT}
       - TOWER_API_KEY=${TOWER_API_KEY}
-      - TOWER_MULTICOVERAGE_ID=${TOWER_MULTICOVERAGE_ID:-31710}
       - TOWER_USERNAME=${TOWER_USERNAME}
       - TOWER_PASSWORD=${TOWER_PASSWORD}
       - DB_PORT=${DB_PORT}
@@ -24,7 +42,20 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - SWAGGER_ENABLED=${SWAGGER_ENABLED:-true}
       - TOWER_COVERAGE_CONCURRENCY=${TOWER_COVERAGE_CONCURRENCY}
+      # Siempre el Redis del compose (servicio "redis"), nunca el del host.
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
+    networks:
+      - tower-net
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes: #para poder ver los archivos de la aplicacion
       - ./:/app
+
+volumes:
+  redis_data:
+
+networks:
+  tower-net:
+    driver: bridge

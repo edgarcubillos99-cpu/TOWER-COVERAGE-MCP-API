@@ -79,7 +79,7 @@ func (h *Handler) CoverageFull(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(payload)
 }
 
-// CoverageLight POST /api/coverage — torres aprobadas vía API TowerCoverage (sin BD/SNMP).
+// CoverageLight POST /api/coverage — torres aprobadas vía GetSiteList + LinkPathAPI (sin BD/SNMP).
 func (h *Handler) CoverageLight(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		h.writeError(w, http.StatusMethodNotAllowed, "método no permitido; usa POST")

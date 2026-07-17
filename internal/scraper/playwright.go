@@ -13,10 +13,12 @@ import (
 	"tower-scraper/internal/db"
 	"tower-scraper/internal/geo"
 	"tower-scraper/internal/models"
+	"tower-scraper/internal/redisx"
 	"tower-scraper/internal/snmp"
 	"tower-scraper/internal/towercoverage"
 
 	"github.com/mxschmitt/playwright-go"
+	"github.com/redis/go-redis/v9"
 )
 
 // skipRFConeWebRender evita la fase lenta de Playwright en EditCoverages (búsqueda de cliente,
@@ -34,6 +36,7 @@ type TowerScraper struct {
 	tcPass         string
 	sessionStarted time.Time
 	apiClient      *towercoverage.Client
+	redis          *redis.Client
 	browserMu      sync.Mutex
 	// pwLimit limita operaciones Playwright concurrentes (Google Maps, flujo legado web).
 	pwLimit *pwLimiter
@@ -47,10 +50,25 @@ func NewTowerScraper(cfg *config.Config) (*TowerScraper, error) {
 	conc := coverageConcurrencyFromEnv()
 	log.Printf("Consultas concurrentes: hasta %d (TOWER_COVERAGE_CONCURRENCY); cobertura vía API REST", conc)
 
+	apiClient := towercoverage.NewClient(cfg.APIAccount, cfg.APIKey)
+
+	rdb, err := redisx.NewClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("redis: %w", err)
+	}
+	apiClient.SiteStore = towercoverage.NewSiteListStore(rdb)
+	log.Printf("Redis conectado en %s (cache GetSiteList)", cfg.RedisAddr)
+
 	return &TowerScraper{
 		pwLimit:   newPWLimiter(conc),
-		apiClient: towercoverage.NewClient(cfg.APIAccount, cfg.APIKey, cfg.MultiCoverageID),
+		apiClient: apiClient,
+		redis:     rdb,
 	}, nil
+}
+
+// APIClient expone el cliente TowerCoverage (cache sitelist / refresco semanal).
+func (s *TowerScraper) APIClient() *towercoverage.Client {
+	return s.apiClient
 }
 
 func (s *TowerScraper) ensureBrowser() error {
@@ -103,9 +121,10 @@ func (s *TowerScraper) Login(username, password string) error {
 	})
 }
 
-// GetTowersData consulta la API de TowerCoverage, cruza con la tabla torres y filtra por distancia.
+// GetTowersData consulta GetSiteList, filtra por distancia y existencia en BD torres,
+// luego evalúa LinkPathAPI y conserva enlaces posibles.
 func (s *TowerScraper) GetTowersData(dbClient *db.DBClient, lat, lon string) ([]models.TowerCoverage, error) {
-	log.Printf("Consultando cobertura vía API para Lat: %s, Lon: %s...", lat, lon)
+	log.Printf("Consultando cobertura vía API (GetSiteList/LinkPath) para Lat: %s, Lon: %s...", lat, lon)
 	return towercoverage.ResolveTowers(dbClient, s.apiClient, lat, lon)
 }
 
@@ -714,5 +733,8 @@ func (s *TowerScraper) Close() {
 	}
 	if s.pw != nil {
 		s.pw.Stop()
+	}
+	if s.redis != nil {
+		_ = s.redis.Close()
 	}
 }
