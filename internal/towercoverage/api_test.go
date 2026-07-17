@@ -90,34 +90,6 @@ func TestLinkPathResultUnmarshalCasing(t *testing.T) {
 	}
 }
 
-func TestApplyCoverageAntennaHeights(t *testing.T) {
-	sites := []Site{
-		{ID: 101, Name: "A", Height: 10},
-		{ID: 202, Name: "B", Height: 0},
-		{ID: 303, Name: "C", Height: 5},
-	}
-	coverages := []Coverage{
-		{TowerSiteID: "101", AntennaHeight: "30"},
-		{TowerSiteID: "202", AntennaHeight: "45.5"},
-		{TowerSiteID: "999", AntennaHeight: "99"}, // sin site
-		{TowerSiteID: "303", AntennaHeight: ""},   // inválida
-		{TowerSiteID: "101", AntennaHeight: "35"}, // última gana para 101
-	}
-	n := applyCoverageAntennaHeights(sites, coverages)
-	if n != 2 {
-		t.Fatalf("sites actualizados = %d, want 2", n)
-	}
-	if sites[0].Height != 35 {
-		t.Fatalf("site 101 height = %v, want 35", sites[0].Height)
-	}
-	if sites[1].Height != 45.5 {
-		t.Fatalf("site 202 height = %v, want 45.5", sites[1].Height)
-	}
-	if sites[2].Height != 5 {
-		t.Fatalf("site 303 height no debía cambiar: %v", sites[2].Height)
-	}
-}
-
 func TestFormatSignal(t *testing.T) {
 	if got := formatSignal("-49.5"); got != "-49.5 dBm" {
 		t.Fatalf("formatSignal inesperado: %q", got)

@@ -13,9 +13,9 @@ import (
 const (
 	siteListRedisKey   = "towercoverage:sitelist"
 	siteListVersionKey = "towercoverage:sitelist:version"
-	// siteListCacheVersion: subir cuando cambie el contenido cacheado (p. ej. enriquecimiento).
-	// v2 = height tomado de GetCoverageList.antennaheight.
-	siteListCacheVersion = "2"
+	// siteListCacheVersion: subir cuando cambie el formato/contenido cacheado.
+	// v3 = solo GetSiteList (sin enriquecimiento GetCoverageList).
+	siteListCacheVersion = "3"
 )
 
 // SiteListStore cachea el resultado de GetSiteList en Redis.
@@ -84,22 +84,6 @@ func (s *SiteListStore) Set(ctx context.Context, sites []Site) error {
 	return nil
 }
 
-// fetchSitesEnriched obtiene GetSiteList, aplica antennaheight de GetCoverageList
-// y devuelve el listado listo para cachear o usar.
-func (c *Client) fetchSitesEnriched() ([]Site, error) {
-	sites, err := c.FetchSiteList()
-	if err != nil {
-		return nil, err
-	}
-	coverages, err := c.FetchCoverageList()
-	if err != nil {
-		return nil, fmt.Errorf("GetCoverageList: %w", err)
-	}
-	n := applyCoverageAntennaHeights(sites, coverages)
-	log.Printf("GetCoverageList: %d coberturas; height actualizado en %d sitios", len(coverages), n)
-	return sites, nil
-}
-
 func (c *Client) cacheHit(ctx context.Context) ([]Site, bool) {
 	if c.SiteStore == nil {
 		return nil, false
@@ -124,14 +108,14 @@ func (c *Client) cacheHit(ctx context.Context) ([]Site, bool) {
 }
 
 // GetSites devuelve el listado desde Redis si existe y está actualizado;
-// si no, llama a la API (sites + coverages) y lo cachea.
+// si no, llama a GetSiteList y lo cachea.
 func (c *Client) GetSites(ctx context.Context) ([]Site, error) {
 	if sites, ok := c.cacheHit(ctx); ok {
 		log.Printf("GetSiteList desde Redis (%d sitios)", len(sites))
 		return sites, nil
 	}
 
-	sites, err := c.fetchSitesEnriched()
+	sites, err := c.FetchSiteList()
 	if err != nil {
 		return nil, err
 	}
@@ -145,9 +129,9 @@ func (c *Client) GetSites(ctx context.Context) ([]Site, error) {
 	return sites, nil
 }
 
-// RefreshSiteList fuerza GetSiteList + GetCoverageList a la API y actualiza Redis.
+// RefreshSiteList fuerza GetSiteList a la API y actualiza Redis.
 func (c *Client) RefreshSiteList(ctx context.Context) error {
-	sites, err := c.fetchSitesEnriched()
+	sites, err := c.FetchSiteList()
 	if err != nil {
 		return err
 	}
@@ -175,9 +159,9 @@ func (c *Client) EnsureSiteListCache(ctx context.Context) error {
 		return err
 	}
 	if !current {
-		log.Printf("Redis sitelist desactualizado o sin versión (esperada v%s); refrescando con GetSiteList + GetCoverageList...", siteListCacheVersion)
+		log.Printf("Redis sitelist desactualizado o sin versión (esperada v%s); refrescando con GetSiteList...", siteListCacheVersion)
 	} else {
-		log.Println("Redis sin sitelist; obteniendo GetSiteList + GetCoverageList de la API...")
+		log.Println("Redis sin sitelist; obteniendo GetSiteList de la API...")
 	}
 	return c.RefreshSiteList(ctx)
 }

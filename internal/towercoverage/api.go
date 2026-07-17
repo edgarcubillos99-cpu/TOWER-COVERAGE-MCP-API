@@ -13,7 +13,6 @@ import (
 
 const (
 	siteListURL      = "https://api.towercoverage.com/Sites/GetSiteList"
-	coverageListURL  = "https://api.towercoverage.com/Coverage/GetCoverageList"
 	linkPathURL      = "https://api.towercoverage.com/Links/LinkPathAPI"
 	maxDistanceMiles = 6.0
 
@@ -45,16 +44,6 @@ type Site struct {
 	Name        string  `json:"name"`
 	Errors      string  `json:"errors"`
 	Error       string  `json:"error"`
-}
-
-// Coverage es una cobertura RF devuelta por GetCoverageList.
-type Coverage struct {
-	ID                int    `json:"id"`
-	Name              string `json:"name"`
-	TowerSiteID       string `json:"towersiteID"`
-	AntennaHeight     string `json:"antennaheight"`
-	Frequency         string `json:"frequency"`
-	RenderingQuality  string `json:"renderingQuality"`
 }
 
 // LinkPathResult es la respuesta JSON de LinkPathAPI.
@@ -213,70 +202,6 @@ func (c *Client) FetchSiteList() ([]Site, error) {
 		return nil, fmt.Errorf("error parseando GetSiteList: %w", err)
 	}
 	return sites, nil
-}
-
-// FetchCoverageList obtiene el listado de coberturas de la cuenta.
-func (c *Client) FetchCoverageList() ([]Coverage, error) {
-	if c.Account == "" || c.Key == "" {
-		return nil, fmt.Errorf("faltan TOWER_API_ACCOUNT o TOWER_API_KEY en el entorno")
-	}
-
-	req, err := http.NewRequest(http.MethodGet, coverageListURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error creando request GetCoverageList: %w", err)
-	}
-	c.setAuthHeaders(req)
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("error llamando GetCoverageList: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("error leyendo GetCoverageList: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GetCoverageList respondió %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	var coverages []Coverage
-	if err := json.Unmarshal(body, &coverages); err != nil {
-		return nil, fmt.Errorf("error parseando GetCoverageList: %w", err)
-	}
-	return coverages, nil
-}
-
-// applyCoverageAntennaHeights copia antennaheight de cada cobertura al Height
-// del site cuyo id coincide con towersiteID. Si hay varias coberturas para el
-// mismo site, prevalece la última con altura válida.
-func applyCoverageAntennaHeights(sites []Site, coverages []Coverage) int {
-	if len(sites) == 0 || len(coverages) == 0 {
-		return 0
-	}
-	byID := make(map[int]int, len(sites))
-	for i := range sites {
-		byID[sites[i].ID] = i
-	}
-	touched := make(map[int]struct{})
-	for _, cov := range coverages {
-		siteID, err := strconv.Atoi(strings.TrimSpace(cov.TowerSiteID))
-		if err != nil {
-			continue
-		}
-		height, err := strconv.ParseFloat(strings.TrimSpace(cov.AntennaHeight), 64)
-		if err != nil || height <= 0 {
-			continue
-		}
-		idx, ok := byID[siteID]
-		if !ok {
-			continue
-		}
-		sites[idx].Height = height
-		touched[siteID] = struct{}{}
-	}
-	return len(touched)
 }
 
 // FetchLinkPath calcula el enlace RF entre torre (Site1) y cliente (Site2)
