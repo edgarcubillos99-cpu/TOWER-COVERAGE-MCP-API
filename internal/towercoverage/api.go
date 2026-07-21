@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"tower-scraper/internal/geo"
 )
 
 const (
@@ -292,10 +295,43 @@ func formatSignal(beam string) string {
 	return beam
 }
 
+// formatSignalRSSI formatea la señal como en el resumen visual de Link Path (-49.4:RSSI).
+func formatSignalRSSI(beam string) string {
+	beam = strings.TrimSpace(beam)
+	if beam == "" {
+		return ""
+	}
+	if f, err := strconv.ParseFloat(beam, 64); err == nil {
+		return fmt.Sprintf("%.1f:RSSI", f)
+	}
+	return beam
+}
+
 func formatCoord(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
 func formatHeight(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// withUnit añade sufijo (m, °, …) si el valor no lo trae ya.
+func withUnit(v, unit string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if unit != "" && strings.HasSuffix(v, unit) {
+		return v
+	}
+	return v + unit
+}
+
+func formatDistanceKm(miles float64) string {
+	km := math.Round(miles*geo.KmPerMile*100) / 100
+	return fmt.Sprintf("%.2fkm", km)
+}
+
+func formatDistanceMi(miles float64) string {
+	return fmt.Sprintf("%.2fmi", miles)
 }

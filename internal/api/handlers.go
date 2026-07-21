@@ -79,7 +79,8 @@ func (h *Handler) CoverageFull(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(payload)
 }
 
-// CoverageLight POST /api/coverage — torres aprobadas vía GetSiteList + LinkPathAPI (sin BD/SNMP).
+// CoverageLight POST /api/coverage — torres aprobadas vía GetSiteList + LinkPathAPI
+// (imagen path + datos tipo resumen visual; cruza BD torres, sin SNMP).
 func (h *Handler) CoverageLight(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		h.writeError(w, http.StatusMethodNotAllowed, "método no permitido; usa POST")
@@ -101,7 +102,11 @@ func (h *Handler) CoverageLight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.writeJSON(w, http.StatusOK, torres)
+	out := make([]models.CoverageLightItem, 0, len(torres))
+	for _, t := range torres {
+		out = append(out, t.ToCoverageLight())
+	}
+	h.writeJSON(w, http.StatusOK, out)
 }
 
 var dispositivoAPQueryKeys = map[string]struct{}{

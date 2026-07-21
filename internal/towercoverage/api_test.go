@@ -99,6 +99,24 @@ func TestFormatSignal(t *testing.T) {
 	}
 }
 
+func TestFormatSignalRSSI(t *testing.T) {
+	if got := formatSignalRSSI("-49.4"); got != "-49.4:RSSI" {
+		t.Fatalf("formatSignalRSSI inesperado: %q", got)
+	}
+}
+
+func TestWithUnit(t *testing.T) {
+	if got := withUnit("18", "m"); got != "18m" {
+		t.Fatalf("withUnit: %q", got)
+	}
+	if got := withUnit("18m", "m"); got != "18m" {
+		t.Fatalf("withUnit idempotente: %q", got)
+	}
+	if got := withUnit("64.59", "°"); got != "64.59°" {
+		t.Fatalf("withUnit grados: %q", got)
+	}
+}
+
 func TestFormatCoord(t *testing.T) {
 	if got := formatCoord(18.191159); got != "18.191159" {
 		t.Fatalf("formatCoord inesperado: %q", got)

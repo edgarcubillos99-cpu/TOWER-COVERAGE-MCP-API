@@ -116,17 +116,43 @@ func ResolveTowers(dbClient *db.DBClient, client *Client, latCliente, lonCliente
 				return
 			}
 
+			latStr := formatCoord(site.Latitude)
+			lonStr := formatCoord(site.Longitude)
+			if v := strings.TrimSpace(link.LeftsiteLatitude); v != "" {
+				latStr = v
+			}
+			if v := strings.TrimSpace(link.LeftsiteLongitude); v != "" {
+				lonStr = v
+			}
+
+			towerHeight := strings.TrimSpace(link.LeftsiteAntennaHeight)
+			if towerHeight == "" {
+				towerHeight = height
+			}
+			clientHeight := strings.TrimSpace(link.RightsiteAntennaHeight)
+			if clientHeight == "" {
+				clientHeight = defaultSite2AntennaHeight
+			}
+			status := "Good Link"
+
 			resultsCh[i] = evalResult{
 				ok: true,
 				tower: models.TowerCoverage{
-					TowerName: site.Name,
-					Latitude:  formatCoord(site.Latitude),
-					Longitude: formatCoord(site.Longitude),
-					Alignment: strings.TrimSpace(link.LeftsiteLinkAzimuth),
-					Tilt:      strings.TrimSpace(link.LeftsiteLinkTilt),
-					Distance:  fmt.Sprintf("%.2f mi", n.distMiles),
-					Signal:    formatSignal(link.SignalInDBm),
-					Status:    "Good Link",
+					TowerName:       site.Name,
+					Group:           strings.TrimSpace(site.Group),
+					Latitude:        latStr,
+					Longitude:       lonStr,
+					Alignment:       withUnit(link.RightsiteLinkAzimuth, "°"),
+					Tilt:            withUnit(link.LeftsiteLinkTilt, "°"),
+					Distance:        formatDistanceMi(n.distMiles),
+					DistanceKm:      formatDistanceKm(n.distMiles),
+					Signal:          formatSignalRSSI(link.SignalInDBm),
+					Status:          status,
+					Elevation:       withUnit(link.LeftsiteGroundElevation, "m"),
+					TowerHeight:     withUnit(towerHeight, "m"),
+					ClientHeight:    clientHeight,
+					SuggestedHeight: withUnit(link.MinimumAntennaHeight, "m"),
+					PathImage:       strings.TrimSpace(link.PathImage),
 				},
 			}
 			log.Printf("✅ APROBADA: %s | Dist: %.2f mi | Signal: %s | Margin: %s",
