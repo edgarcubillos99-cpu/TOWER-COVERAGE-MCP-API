@@ -8,6 +8,9 @@ info:
 
     - **Cobertura ligera**: solo datos del mapa TowerCoverage.
     - **Cobertura completa**: mismo pipeline que la herramienta MCP `get_tower_coverage` (scraper + BD + SNMP).
+    - **Cache por proximidad**: tras una cobertura full se guardan torres/antenas en un Redis remoto
+      (`COVERAGE_REDIS_HOST`); peticiones light o full dentro de `COVERAGE_CACHE_RADIUS_M` (default 25 m)
+      reutilizan el punto más cercano. El Redis local/Docker solo cachea GetSiteList.
     - **Dispositivos AP** y **Torres**: consultas de solo lectura a MySQL.
 
     **Autenticación REST**: si `JWT_SECRET` está definido en el servidor,
@@ -46,6 +49,8 @@ paths:
         Devuelve torres con enlace viable, imagen del perfil (base64) y datos
         organizados como el resumen visual (torre / cliente / rendimiento).
         Cruza con la tabla `torres` en BD; no consulta SNMP.
+        Si existe una cobertura full previa dentro del radio de cache (default 25 m),
+        reutiliza esas torres sin llamar a TowerCoverage.
       operationId: postCoverageLight
       requestBody:
         required: true
@@ -86,6 +91,9 @@ paths:
       description: |
         Ejecuta el pipeline completo: scraper TowerCoverage, cruce con `dispositivos_ap`,
         verificación trigonométrica y lectura SNMP de capacidad.
+        Tras un cálculo exitoso guarda torres y antenas en Redis. Si ya hay un punto
+        previo dentro del radio de cache (default 25 m), devuelve el más cercano sin
+        volver a consultar TowerCoverage.
 
         Acepta un punto (`lat` + `lon`), un array en `locations`, o un array raíz
         `[{ "lat": "...", "lon": "..." }]`. Varias ubicaciones se procesan en paralelo.

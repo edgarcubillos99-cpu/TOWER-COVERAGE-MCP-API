@@ -53,7 +53,8 @@ func main() {
 	tool := mcp.NewTool("get_tower_coverage",
 		mcp.WithDescription("Obtiene torres cercanas y verifica cobertura de APs (trigonometría y SNMP). "+
 			"Un punto: lat + lon. Varios puntos: rellena locations_json con un array JSON (string). "+
-			"Varias consultas en paralelo. REST para n8n: POST /api/coverage/full con el mismo cuerpo."),
+			"Varias consultas en paralelo. REST para n8n: POST /api/coverage/full con el mismo cuerpo. "+
+			"Si ya se calculó una cobertura full dentro de ~25 m (COVERAGE_CACHE_RADIUS_M), reutiliza ese resultado."),
 		mcp.WithString("lat", mcp.Description("Latitud cliente (si es un solo punto y no usas locations_json)")),
 		mcp.WithString("lon", mcp.Description("Longitud cliente (si es un solo punto y no usas locations_json)")),
 		mcp.WithString("locations_json", mcp.Description(

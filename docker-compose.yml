@@ -42,10 +42,16 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - SWAGGER_ENABLED=${SWAGGER_ENABLED:-true}
       - TOWER_COVERAGE_CONCURRENCY=${TOWER_COVERAGE_CONCURRENCY}
-      # Siempre el Redis del compose (servicio "redis"), nunca el del host.
+      # Redis local del compose: solo GetSiteList.
       - REDIS_ADDR=redis:6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_DB=${REDIS_DB:-0}
+      # Redis remoto: coberturas por proximidad (no forzar; viene de .env).
+      - COVERAGE_REDIS_HOST=${COVERAGE_REDIS_HOST:-}
+      - COVERAGE_REDIS_PORT=${COVERAGE_REDIS_PORT:-6379}
+      - COVERAGE_REDIS_PASSWORD=${COVERAGE_REDIS_PASSWORD:-}
+      - COVERAGE_REDIS_DB=${COVERAGE_REDIS_DB:-0}
+      - COVERAGE_CACHE_RADIUS_M=${COVERAGE_CACHE_RADIUS_M:-25}
     networks:
       - tower-net
     extra_hosts:

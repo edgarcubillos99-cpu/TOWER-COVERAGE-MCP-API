@@ -36,7 +36,8 @@ type TowerScraper struct {
 	tcPass         string
 	sessionStarted time.Time
 	apiClient      *towercoverage.Client
-	redis          *redis.Client
+	redis          *redis.Client // Redis local/Docker: GetSiteList
+	coverageRedis  *redis.Client // Redis remoto: resultados de cobertura por proximidad
 	browserMu      sync.Mutex
 	// pwLimit limita operaciones Playwright concurrentes (Google Maps, flujo legado web).
 	pwLimit *pwLimiter
@@ -54,21 +55,43 @@ func NewTowerScraper(cfg *config.Config) (*TowerScraper, error) {
 
 	rdb, err := redisx.NewClient(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("redis: %w", err)
+		return nil, fmt.Errorf("redis local (sitelist): %w", err)
 	}
 	apiClient.SiteStore = towercoverage.NewSiteListStore(rdb)
-	log.Printf("Redis conectado en %s (cache GetSiteList)", cfg.RedisAddr)
+	log.Printf("Redis local conectado en %s (cache GetSiteList)", cfg.RedisAddr)
+
+	covRDB, err := redisx.NewCoverageClient(cfg)
+	if err != nil {
+		_ = rdb.Close()
+		return nil, fmt.Errorf("redis remoto (coberturas): %w", err)
+	}
+	if covRDB != nil {
+		log.Printf("Redis remoto conectado en %s (cache coberturas por proximidad)", cfg.CoverageRedisAddr())
+	} else {
+		log.Println("⚠️ COVERAGE_REDIS_HOST no definido: cache de coberturas por proximidad desactivado")
+	}
 
 	return &TowerScraper{
-		pwLimit:   newPWLimiter(conc),
-		apiClient: apiClient,
-		redis:     rdb,
+		pwLimit:       newPWLimiter(conc),
+		apiClient:     apiClient,
+		redis:         rdb,
+		coverageRedis: covRDB,
 	}, nil
 }
 
 // APIClient expone el cliente TowerCoverage (cache sitelist / refresco semanal).
 func (s *TowerScraper) APIClient() *towercoverage.Client {
 	return s.apiClient
+}
+
+// Redis expone el Redis local/Docker (cache GetSiteList).
+func (s *TowerScraper) Redis() *redis.Client {
+	return s.redis
+}
+
+// CoverageRedis expone el Redis remoto (cache de coberturas procesadas).
+func (s *TowerScraper) CoverageRedis() *redis.Client {
+	return s.coverageRedis
 }
 
 func (s *TowerScraper) ensureBrowser() error {
@@ -736,5 +759,8 @@ func (s *TowerScraper) Close() {
 	}
 	if s.redis != nil {
 		_ = s.redis.Close()
+	}
+	if s.coverageRedis != nil {
+		_ = s.coverageRedis.Close()
 	}
 }

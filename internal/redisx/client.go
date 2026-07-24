@@ -10,17 +10,30 @@ import (
 	"tower-scraper/internal/config"
 )
 
-// NewClient crea un cliente Redis y verifica la conexión con PING.
+// NewClient crea el cliente Redis local/Docker (cache GetSiteList) y verifica PING.
 func NewClient(cfg *config.Config) (*redis.Client, error) {
 	addr := cfg.RedisAddr
 	if addr == "" {
 		addr = "redis:6379"
 	}
+	return dial(addr, cfg.RedisPassword, cfg.RedisDB)
+}
 
+// NewCoverageClient crea el cliente Redis remoto para cache de coberturas.
+// Si COVERAGE_REDIS_HOST está vacío, devuelve (nil, nil) — el cache de cobertura queda desactivado.
+func NewCoverageClient(cfg *config.Config) (*redis.Client, error) {
+	addr := cfg.CoverageRedisAddr()
+	if addr == "" {
+		return nil, nil
+	}
+	return dial(addr, cfg.CoverageRedisPassword, cfg.CoverageRedisDB)
+}
+
+func dial(addr, password string, db int) (*redis.Client, error) {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     addr,
-		Password: cfg.RedisPassword,
-		DB:       cfg.RedisDB,
+		Password: password,
+		DB:       db,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

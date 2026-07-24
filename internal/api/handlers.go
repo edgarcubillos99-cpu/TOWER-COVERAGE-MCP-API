@@ -2,11 +2,14 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"tower-scraper/internal/coverage"
 	"tower-scraper/internal/db"
@@ -16,8 +19,8 @@ import (
 )
 
 type Handler struct {
-	Scraper  *scraper.TowerScraper
-	DB       *db.DBClient
+	Scraper     *scraper.TowerScraper
+	DB          *db.DBClient
 	ParseCoords func(raw any) ([]coverage.Coord, error)
 }
 
@@ -81,6 +84,8 @@ func (h *Handler) CoverageFull(w http.ResponseWriter, r *http.Request) {
 
 // CoverageLight POST /api/coverage — torres aprobadas vía GetSiteList + LinkPathAPI
 // (imagen path + datos tipo resumen visual; cruza BD torres, sin SNMP).
+// Si existe una cobertura full previa dentro del radio de cache (default 25 m),
+// reutiliza las torres guardadas y evita llamar a TowerCoverage.
 func (h *Handler) CoverageLight(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		h.writeError(w, http.StatusMethodNotAllowed, "método no permitido; usa POST")
@@ -93,6 +98,23 @@ func (h *Handler) CoverageLight(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
 		h.writeError(w, http.StatusBadRequest, "JSON inválido")
+		return
+	}
+
+	store := coverage.NewResultStore(h.Scraper.CoverageRedis())
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	cached, distM, err := store.FindNearestFromStrings(ctx, reqBody.Lat, reqBody.Lon)
+	cancel()
+	if err != nil {
+		log.Printf("⚠️ Cache cobertura (light): %v — se consultará la API", err)
+	} else if cached != nil {
+		log.Printf("Cache hit cobertura light (%.1f m de punto previo; radio %.0f m) → %d torres",
+			distM, store.RadiusM(), len(cached.Towers))
+		out := cached.Towers
+		if out == nil {
+			out = []models.CoverageLightItem{}
+		}
+		h.writeJSON(w, http.StatusOK, out)
 		return
 	}
 

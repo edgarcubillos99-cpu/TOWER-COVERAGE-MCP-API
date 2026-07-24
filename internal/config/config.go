@@ -41,9 +41,14 @@ type Config struct {
 	DBUser         string
 	DBPass         string
 	DBName         string
-	RedisAddr      string // host:port (p. ej. redis:6379 en Docker)
+	RedisAddr      string // Redis local/Docker: cache GetSiteList (host:port)
 	RedisPassword  string
 	RedisDB        int
+	// CoverageRedis*: Redis remoto para cache de coberturas por proximidad.
+	CoverageRedisHost     string
+	CoverageRedisPort     string
+	CoverageRedisPassword string
+	CoverageRedisDB       int
 }
 
 func LoadConfig() *Config {
@@ -61,35 +66,51 @@ func LoadConfig() *Config {
 	dbName := os.Getenv("DB_NAME")
 	redisAddr := getEnvOrDefault("REDIS_ADDR", "redis:6379")
 	redisPassword := os.Getenv("REDIS_PASSWORD")
-	redisDB := 0
-	if v := strings.TrimSpace(os.Getenv("REDIS_DB")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			redisDB = n
-		}
-	}
+	redisDB := envInt("REDIS_DB", 0)
+
+	coverageRedisHost := strings.TrimSpace(firstEnv("COVERAGE_REDIS_HOST", "REDIS_COVERAGE_HOST"))
+	coverageRedisPort := getEnvOrDefault("COVERAGE_REDIS_PORT", "6379")
+	coverageRedisPassword := firstEnv("COVERAGE_REDIS_PASSWORD", "REDIS_COVERAGE_PASSWORD")
+	coverageRedisDB := envInt("COVERAGE_REDIS_DB", 0)
 
 	if apiAccount == "" || apiKey == "" {
 		log.Fatal("Faltan TOWER_API_ACCOUNT o TOWER_API_KEY en el entorno")
 	}
 
 	return &Config{
-		Username:       username,
-		Password:       password,
-		APIAccount:     apiAccount,
-		APIKey:         apiKey,
-		AppPort:        appPort,
-		MCPAPIKey:      os.Getenv("MCP_API_KEY"),
-		JWTSecret:      os.Getenv("JWT_SECRET"),
-		SwaggerEnabled: envBool("SWAGGER_ENABLED", true),
-		DBHost:         dbHost,
-		DBPort:         dbPort,
-		DBUser:         dbUser,
-		DBPass:         dbPass,
-		DBName:         dbName,
-		RedisAddr:      redisAddr,
-		RedisPassword:  redisPassword,
-		RedisDB:        redisDB,
+		Username:              username,
+		Password:              password,
+		APIAccount:            apiAccount,
+		APIKey:                apiKey,
+		AppPort:               appPort,
+		MCPAPIKey:             os.Getenv("MCP_API_KEY"),
+		JWTSecret:             os.Getenv("JWT_SECRET"),
+		SwaggerEnabled:        envBool("SWAGGER_ENABLED", true),
+		DBHost:                dbHost,
+		DBPort:                dbPort,
+		DBUser:                dbUser,
+		DBPass:                dbPass,
+		DBName:                dbName,
+		RedisAddr:             redisAddr,
+		RedisPassword:         redisPassword,
+		RedisDB:               redisDB,
+		CoverageRedisHost:     coverageRedisHost,
+		CoverageRedisPort:     coverageRedisPort,
+		CoverageRedisPassword: coverageRedisPassword,
+		CoverageRedisDB:       coverageRedisDB,
 	}
+}
+
+// CoverageRedisAddr construye host:port del Redis remoto de coberturas.
+func (c *Config) CoverageRedisAddr() string {
+	if c == nil || strings.TrimSpace(c.CoverageRedisHost) == "" {
+		return ""
+	}
+	port := strings.TrimSpace(c.CoverageRedisPort)
+	if port == "" {
+		port = "6379"
+	}
+	return strings.TrimSpace(c.CoverageRedisHost) + ":" + port
 }
 
 // Función auxiliar para mantener limpio el código
@@ -114,4 +135,16 @@ func envBool(key string, defaultVal bool) bool {
 	default:
 		return defaultVal
 	}
+}
+
+func envInt(key string, defaultVal int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return defaultVal
+	}
+	return n
 }
