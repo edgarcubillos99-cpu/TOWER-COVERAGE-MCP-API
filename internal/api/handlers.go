@@ -22,6 +22,7 @@ type Handler struct {
 	Scraper     *scraper.TowerScraper
 	DB          *db.DBClient
 	ParseCoords func(raw any) ([]coverage.Coord, error)
+	RateGate    coverage.RateGate // límite global RPS vía RabbitMQ (opcional)
 }
 
 func (h *Handler) writeJSON(w http.ResponseWriter, status int, v any) {
@@ -71,7 +72,7 @@ func (h *Handler) CoverageFull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, err := coverage.RunConsultas(h.Scraper, h.DB, coords)
+	payload, err := coverage.RunConsultas(h.Scraper, h.DB, coords, h.RateGate)
 	if err != nil {
 		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("fallo consulta cobertura: %v", err))
 		return
@@ -118,6 +119,15 @@ func (h *Handler) CoverageLight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rateCtx, rateCancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	if err := h.acquireRate(rateCtx); err != nil {
+		rateCancel()
+		h.writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	rateCancel()
+	log.Printf("Cupo TowerCoverage adquirido (light) para Lat: %s, Lon: %s", reqBody.Lat, reqBody.Lon)
+
 	torres, err := h.Scraper.GetTowersData(h.DB, reqBody.Lat, reqBody.Lon)
 	if err != nil {
 		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("error obteniendo datos: %v", err))
@@ -129,6 +139,13 @@ func (h *Handler) CoverageLight(w http.ResponseWriter, r *http.Request) {
 		out = append(out, t.ToCoverageLight())
 	}
 	h.writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) acquireRate(ctx context.Context) error {
+	if h == nil || h.RateGate == nil {
+		return nil
+	}
+	return h.RateGate.Acquire(ctx)
 }
 
 var dispositivoAPQueryKeys = map[string]struct{}{

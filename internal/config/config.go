@@ -49,6 +49,12 @@ type Config struct {
 	CoverageRedisPort     string
 	CoverageRedisPassword string
 	CoverageRedisDB       int
+	// RabbitMQ: límite global de peticiones TowerCoverage entre instancias.
+	RabbitMQURL        string
+	RabbitMQRateQueue  string
+	CoverageMaxRPS     float64
+	CoverageRateBurst  int
+	RabbitMQRateLeader bool
 }
 
 func LoadConfig() *Config {
@@ -72,6 +78,17 @@ func LoadConfig() *Config {
 	coverageRedisPort := getEnvOrDefault("COVERAGE_REDIS_PORT", "6379")
 	coverageRedisPassword := firstEnv("COVERAGE_REDIS_PASSWORD", "REDIS_COVERAGE_PASSWORD")
 	coverageRedisDB := envInt("COVERAGE_REDIS_DB", 0)
+
+	rabbitURL := strings.TrimSpace(firstEnv("RABBITMQ_URL", "AMQP_URL"))
+	rabbitRateQueue := getEnvOrDefault("RABBITMQ_RATE_QUEUE", "towercoverage.rate.tokens")
+	coverageMaxRPS := envFloat("COVERAGE_MAX_RPS", 2)
+	coverageRateBurst := envInt("COVERAGE_RATE_BURST", 0)
+	if coverageRateBurst <= 0 {
+		coverageRateBurst = int(coverageMaxRPS)
+		if coverageRateBurst < 1 {
+			coverageRateBurst = 1
+		}
+	}
 
 	if apiAccount == "" || apiKey == "" {
 		log.Fatal("Faltan TOWER_API_ACCOUNT o TOWER_API_KEY en el entorno")
@@ -98,6 +115,11 @@ func LoadConfig() *Config {
 		CoverageRedisPort:     coverageRedisPort,
 		CoverageRedisPassword: coverageRedisPassword,
 		CoverageRedisDB:       coverageRedisDB,
+		RabbitMQURL:           rabbitURL,
+		RabbitMQRateQueue:     rabbitRateQueue,
+		CoverageMaxRPS:        coverageMaxRPS,
+		CoverageRateBurst:     coverageRateBurst,
+		RabbitMQRateLeader:    envBool("RABBITMQ_RATE_LEADER", false),
 	}
 }
 
@@ -144,6 +166,18 @@ func envInt(key string, defaultVal int) int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
+		return defaultVal
+	}
+	return n
+}
+
+func envFloat(key string, defaultVal float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return defaultVal
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil || n <= 0 {
 		return defaultVal
 	}
 	return n

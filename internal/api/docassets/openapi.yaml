@@ -11,6 +11,8 @@ info:
     - **Cache por proximidad**: tras una cobertura full se guardan torres/antenas en un Redis remoto
       (`COVERAGE_REDIS_HOST`); peticiones light o full dentro de `COVERAGE_CACHE_RADIUS_M` (default 25 m)
       reutilizan el punto más cercano. El Redis local/Docker solo cachea GetSiteList.
+    - **Rate limit global (RabbitMQ)**: con varias instancias, los cache miss esperan un token de
+      `RABBITMQ_RATE_QUEUE` (máx. `COVERAGE_MAX_RPS` entre todas). Los cache hit no consumen token.
     - **Dispositivos AP** y **Torres**: consultas de solo lectura a MySQL.
 
     **Autenticación REST**: si `JWT_SECRET` está definido en el servidor,

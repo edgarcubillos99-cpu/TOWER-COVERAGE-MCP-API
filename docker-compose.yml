@@ -52,6 +52,12 @@ services:
       - COVERAGE_REDIS_PASSWORD=${COVERAGE_REDIS_PASSWORD:-}
       - COVERAGE_REDIS_DB=${COVERAGE_REDIS_DB:-0}
       - COVERAGE_CACHE_RADIUS_M=${COVERAGE_CACHE_RADIUS_M:-25}
+      # RabbitMQ corporativo (rate limit global).
+      - RABBITMQ_URL=${RABBITMQ_URL:-}
+      - RABBITMQ_RATE_QUEUE=${RABBITMQ_RATE_QUEUE:-towercoverage.rate.tokens}
+      - COVERAGE_MAX_RPS=${COVERAGE_MAX_RPS:-2}
+      - COVERAGE_RATE_BURST=${COVERAGE_RATE_BURST:-2}
+      - RABBITMQ_RATE_LEADER=${RABBITMQ_RATE_LEADER:-false}
     networks:
       - tower-net
     extra_hosts:

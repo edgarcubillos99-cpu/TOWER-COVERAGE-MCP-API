@@ -28,13 +28,14 @@ type consultaBloque struct {
 // RunConsultas ejecuta el pipeline completo de cobertura (scraper + BD + SNMP).
 // Antes de consultar TowerCoverage, reutiliza resultados Redis si hay un punto
 // previo dentro del radio configurado (COVERAGE_CACHE_RADIUS_M, default 25 m).
-func RunConsultas(ts *scraper.TowerScraper, dbClient *db.DBClient, coords []Coord) ([]byte, error) {
+// Si gate != nil, tras un cache miss espera un cupo global (RabbitMQ) antes de llamar a la API.
+func RunConsultas(ts *scraper.TowerScraper, dbClient *db.DBClient, coords []Coord, gate RateGate) ([]byte, error) {
 	if len(coords) == 0 {
 		return nil, errSinCoordenadas
 	}
 	store := NewResultStore(ts.CoverageRedis())
 	if len(coords) == 1 {
-		res, err := runForCoord(ts, dbClient, store, coords[0].Lat, coords[0].Lon)
+		res, err := runForCoord(ts, dbClient, store, gate, coords[0].Lat, coords[0].Lon)
 		if err != nil {
 			return nil, err
 		}
@@ -52,7 +53,7 @@ func RunConsultas(ts *scraper.TowerScraper, dbClient *db.DBClient, coords []Coor
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			res, err := runForCoord(ts, dbClient, store, lat, lon)
+			res, err := runForCoord(ts, dbClient, store, gate, lat, lon)
 			out[i].Lat, out[i].Lon = lat, lon
 			if err != nil {
 				out[i].Error = err.Error()
@@ -69,7 +70,7 @@ func RunConsultas(ts *scraper.TowerScraper, dbClient *db.DBClient, coords []Coor
 	return json.MarshalIndent(wrapped, "", "  ")
 }
 
-func runForCoord(ts *scraper.TowerScraper, dbClient *db.DBClient, store *ResultStore, lat, lon string) ([]models.RespuestaMCP, error) {
+func runForCoord(ts *scraper.TowerScraper, dbClient *db.DBClient, store *ResultStore, gate RateGate, lat, lon string) ([]models.RespuestaMCP, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	cached, distM, err := store.FindNearestFromStrings(ctx, lat, lon)
 	cancel()
@@ -80,6 +81,14 @@ func runForCoord(ts *scraper.TowerScraper, dbClient *db.DBClient, store *ResultS
 			distM, store.RadiusM(), len(cached.Resultados))
 		return cached.Resultados, nil
 	}
+
+	rateCtx, rateCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	err = acquireTowerSlot(rateCtx, gate)
+	rateCancel()
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("Cupo TowerCoverage adquirido (full) para Lat: %s, Lon: %s", lat, lon)
 
 	torres, err := ts.GetTowersData(dbClient, lat, lon)
 	if err != nil {
