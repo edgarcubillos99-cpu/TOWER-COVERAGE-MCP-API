@@ -1,20 +1,13 @@
 package scraper
 
 import (
-	"os"
-	"strconv"
 	"sync"
+
+	"tower-scraper/internal/concurrency"
 )
 
-const defaultCoverageConcurrency = 5
-
 func coverageConcurrencyFromEnv() int {
-	if v := os.Getenv("TOWER_COVERAGE_CONCURRENCY"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return defaultCoverageConcurrency
+	return concurrency.FromEnv()
 }
 
 func newPWLimiter(max int) *pwLimiter {

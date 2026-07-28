@@ -11,7 +11,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -21,6 +20,7 @@ import (
 	"tower-scraper/internal/coverage"
 	"tower-scraper/internal/db"
 	"tower-scraper/internal/mcpimage"
+	"tower-scraper/internal/rabbitmq"
 	"tower-scraper/internal/scraper"
 )
 
@@ -35,45 +35,48 @@ func main() {
 		log.Fatalf("Error inicializando DB: %v", err)
 	}
 
-	// Caché en Redis: tras conectar a MySQL, precargamos todas las torres y sus APs para que
-	// las consultas de cobertura lean de Redis en vez de MySQL. Si Redis no está disponible,
-	// InitRedis avisa y el sistema sigue funcionando solo con MySQL.
-	if err := dbClient.InitRedis(cfg); err != nil {
-		log.Printf("⚠️ Inicializando Redis: %v", err)
-	}
-	if dbClient.CacheEnabled() {
-		defer func() { _ = dbClient.Close() }()
-		log.Println("Precargando torres y APs en Redis...")
-		ctxWarm, cancelWarm := context.WithTimeout(context.Background(), 60*time.Second)
-		torresCache, apsCache, warmErr := dbClient.WarmCache(ctxWarm)
-		cancelWarm()
-		if warmErr != nil {
-			log.Printf("⚠️ Falló la precarga en Redis: %v. Las consultas caerán a MySQL bajo demanda.", warmErr)
-		} else {
-			log.Printf("✅ Caché lista: %d torres con APs precargadas (%d APs en total).", torresCache, apsCache)
-		}
-	}
-
-	log.Println("Inicializando motor Headless...")
-	ts, err := scraper.NewTowerScraper()
+	log.Println("Inicializando servicio de cobertura (API TowerCoverage)...")
+	ts, err := scraper.NewTowerScraper(cfg)
 	if err != nil {
 		log.Fatalf("Error inicializando scraper: %v", err)
 	}
 	defer ts.Close()
 
-	log.Println("Ejecutando login en TowerCoverage...")
-	err = ts.Login(cfg.Username, cfg.Password)
-	if err != nil {
-		log.Fatalf("Error en el login: %v", err)
+	siteCtx, siteCancel := context.WithCancel(context.Background())
+	defer siteCancel()
+	if err := ts.APIClient().EnsureSiteListCache(siteCtx); err != nil {
+		log.Fatalf("Error preparando cache GetSiteList en Redis: %v", err)
 	}
-	ts.StartSessionKeeper()
+	ts.APIClient().StartSundaySiteListRefresh(siteCtx)
+
+	var rateGate coverage.RateGate
+	if cfg.RabbitMQURL != "" {
+		rl, err := rabbitmq.NewRateLimiter(rabbitmq.Options{
+			URL:    cfg.RabbitMQURL,
+			Queue:  cfg.RabbitMQRateQueue,
+			RPS:    cfg.CoverageMaxRPS,
+			Burst:  cfg.CoverageRateBurst,
+			Leader: cfg.RabbitMQRateLeader,
+		})
+		if err != nil {
+			log.Fatalf("Error conectando RabbitMQ (rate limit): %v", err)
+		}
+		defer rl.Close()
+		rateGate = rl
+		if !cfg.RabbitMQRateLeader {
+			log.Println("ℹ️ RABBITMQ_RATE_LEADER=false: esta instancia solo consume tokens. Una de las dos debe ser leader.")
+		}
+	} else {
+		log.Println("⚠️ RABBITMQ_URL no definida: sin límite global de peticiones entre instancias")
+	}
 
 	mcpServer := server.NewMCPServer("TowerCoverageService", "1.0.0")
 
 	tool := mcp.NewTool("get_tower_coverage",
 		mcp.WithDescription("Obtiene torres cercanas y verifica cobertura de APs (trigonometría y SNMP). "+
 			"Un punto: lat + lon. Varios puntos: rellena locations_json con un array JSON (string). "+
-			"Varias consultas en paralelo. REST para n8n: POST /api/coverage/full con el mismo cuerpo."),
+			"Varias consultas en paralelo. REST para n8n: POST /api/coverage/full con el mismo cuerpo. "+
+			"Si ya se calculó una cobertura full dentro de ~25 m (COVERAGE_CACHE_RADIUS_M), reutiliza ese resultado."),
 		mcp.WithString("lat", mcp.Description("Latitud cliente (si es un solo punto y no usas locations_json)")),
 		mcp.WithString("lon", mcp.Description("Longitud cliente (si es un solo punto y no usas locations_json)")),
 		mcp.WithString("locations_json", mcp.Description(
@@ -93,7 +96,7 @@ func main() {
 			log.Printf("🤖 MCP Request -> %d ubicaciones en paralelo", len(coords))
 		}
 
-		resultJSON, err := coverage.RunConsultas(ts, dbClient, toCoverageCoords(coords))
+		resultJSON, err := coverage.RunConsultas(ts, dbClient, toCoverageCoords(coords), rateGate)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Fallo consulta cobertura: %v", err)), nil
 		}
@@ -156,8 +159,9 @@ func main() {
 		http.Handle("/message", mcpBearerAuth(cfg.MCPAPIKey, sseServer.MessageHandler()))
 
 		api.Register(&api.Handler{
-			Scraper: ts,
-			DB:      dbClient,
+			Scraper:  ts,
+			DB:       dbClient,
+			RateGate: rateGate,
 			ParseCoords: func(raw any) ([]coverage.Coord, error) {
 				pairs, err := coordsFromAnyRoot(raw)
 				if err != nil {

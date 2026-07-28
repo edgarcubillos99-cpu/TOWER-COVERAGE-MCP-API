@@ -8,6 +8,11 @@ info:
 
     - **Cobertura ligera**: solo datos del mapa TowerCoverage.
     - **Cobertura completa**: mismo pipeline que la herramienta MCP `get_tower_coverage` (scraper + BD + SNMP).
+    - **Cache por proximidad**: tras una cobertura full se guardan torres/antenas en un Redis remoto
+      (`COVERAGE_REDIS_HOST`); peticiones light o full dentro de `COVERAGE_CACHE_RADIUS_M` (default 25 m)
+      reutilizan el punto más cercano. El Redis local/Docker solo cachea GetSiteList.
+    - **Rate limit global (RabbitMQ)**: con varias instancias, los cache miss esperan un token de
+      `RABBITMQ_RATE_QUEUE` (máx. `COVERAGE_MAX_RPS` entre todas). Los cache hit no consumen token.
     - **Dispositivos AP** y **Torres**: consultas de solo lectura a MySQL.
 
     **Autenticación REST**: si `JWT_SECRET` está definido en el servidor,
@@ -42,8 +47,12 @@ paths:
       tags: [Cobertura]
       summary: Cobertura ligera (solo mapa)
       description: |
-        Navega al mapa de TowerCoverage con las coordenadas indicadas y devuelve
-        las torres visibles en el resultado. **No** consulta BD ni SNMP.
+        Evalúa cobertura vía GetSiteList + LinkPathAPI para las coordenadas indicadas.
+        Devuelve torres con enlace viable, imagen del perfil (base64) y datos
+        organizados como el resumen visual (torre / cliente / rendimiento).
+        Cruza con la tabla `torres` en BD; no consulta SNMP.
+        Si existe una cobertura full previa dentro del radio de cache (default 25 m),
+        reutiliza esas torres sin llamar a TowerCoverage.
       operationId: postCoverageLight
       requestBody:
         required: true
@@ -59,13 +68,13 @@ paths:
                   lon: "-66.736353"
       responses:
         '200':
-          description: Lista de torres del mapa
+          description: Lista de torres con enlace viable (Link Path)
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/TowerCoverage'
+                  $ref: '#/components/schemas/CoverageLightItem'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '400':
@@ -84,6 +93,9 @@ paths:
       description: |
         Ejecuta el pipeline completo: scraper TowerCoverage, cruce con `dispositivos_ap`,
         verificación trigonométrica y lectura SNMP de capacidad.
+        Tras un cálculo exitoso guarda torres y antenas en Redis. Si ya hay un punto
+        previo dentro del radio de cache (default 25 m), devuelve el más cercano sin
+        volver a consultar TowerCoverage.
 
         Acepta un punto (`lat` + `lon`), un array en `locations`, o un array raíz
         `[{ "lat": "...", "lon": "..." }]`. Varias ubicaciones se procesan en paralelo.
@@ -473,6 +485,7 @@ components:
 
     TowerCoverage:
       type: object
+      description: Modelo interno (pipeline completo). El endpoint ligero usa CoverageLightItem.
       properties:
         TowerName:
           type: string
@@ -490,6 +503,73 @@ components:
           type: string
         Status:
           type: string
+
+    CoverageLightItem:
+      type: object
+      description: |
+        Resumen de Link Path por torre viable, alineado al panel visual
+        (torre / cliente / rendimiento) e imagen del perfil en base64.
+      properties:
+        tower_name:
+          type: string
+          example: OSN.Inter
+        group:
+          type: string
+          example: Fiber Coverages
+        path_image:
+          type: string
+          description: Imagen del perfil de enlace en base64 (campo pathimage de LinkPathAPI)
+        tower:
+          $ref: '#/components/schemas/CoverageLightTower'
+        client:
+          $ref: '#/components/schemas/CoverageLightClient'
+        performance:
+          $ref: '#/components/schemas/CoverageLightPerformance'
+
+    CoverageLightTower:
+      type: object
+      properties:
+        location:
+          type: string
+          example: "18.4727, -66.7602"
+        elevation:
+          type: string
+          example: 56.3m
+        height:
+          type: string
+          example: 18m
+
+    CoverageLightClient:
+      type: object
+      properties:
+        alignment:
+          type: string
+          example: 64.59°
+        tilt:
+          type: string
+          example: "-0.07°"
+        height:
+          type: string
+          example: "6"
+
+    CoverageLightPerformance:
+      type: object
+      properties:
+        status:
+          type: string
+          example: Good Link
+        signal:
+          type: string
+          example: "-49.4:RSSI"
+        distance:
+          type: string
+          example: 2.95km
+        distance_mi:
+          type: string
+          example: 1.83mi
+        suggested_height:
+          type: string
+          example: 0m
 
     RespuestaCobertura:
       type: object

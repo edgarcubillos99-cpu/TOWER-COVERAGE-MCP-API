@@ -2,11 +2,14 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"tower-scraper/internal/coverage"
 	"tower-scraper/internal/db"
@@ -16,9 +19,10 @@ import (
 )
 
 type Handler struct {
-	Scraper  *scraper.TowerScraper
-	DB       *db.DBClient
+	Scraper     *scraper.TowerScraper
+	DB          *db.DBClient
 	ParseCoords func(raw any) ([]coverage.Coord, error)
+	RateGate    coverage.RateGate // límite global RPS vía RabbitMQ (opcional)
 }
 
 func (h *Handler) writeJSON(w http.ResponseWriter, status int, v any) {
@@ -68,7 +72,7 @@ func (h *Handler) CoverageFull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, err := coverage.RunConsultas(h.Scraper, h.DB, coords)
+	payload, err := coverage.RunConsultas(h.Scraper, h.DB, coords, h.RateGate)
 	if err != nil {
 		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("fallo consulta cobertura: %v", err))
 		return
@@ -79,7 +83,10 @@ func (h *Handler) CoverageFull(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(payload)
 }
 
-// CoverageLight POST /api/coverage — solo torres del mapa TowerCoverage (sin BD/SNMP).
+// CoverageLight POST /api/coverage — torres aprobadas vía GetSiteList + LinkPathAPI
+// (imagen path + datos tipo resumen visual; cruza BD torres, sin SNMP).
+// Si existe una cobertura full previa dentro del radio de cache (default 25 m),
+// reutiliza las torres guardadas y evita llamar a TowerCoverage.
 func (h *Handler) CoverageLight(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		h.writeError(w, http.StatusMethodNotAllowed, "método no permitido; usa POST")
@@ -95,13 +102,50 @@ func (h *Handler) CoverageLight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	torres, err := h.Scraper.GetTowersData(reqBody.Lat, reqBody.Lon)
+	store := coverage.NewResultStore(h.Scraper.CoverageRedis())
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	cached, distM, err := store.FindNearestFromStrings(ctx, reqBody.Lat, reqBody.Lon)
+	cancel()
+	if err != nil {
+		log.Printf("⚠️ Cache cobertura (light): %v — se consultará la API", err)
+	} else if cached != nil {
+		log.Printf("Cache hit cobertura light (%.1f m de punto previo; radio %.0f m) → %d torres",
+			distM, store.RadiusM(), len(cached.Towers))
+		out := cached.Towers
+		if out == nil {
+			out = []models.CoverageLightItem{}
+		}
+		h.writeJSON(w, http.StatusOK, out)
+		return
+	}
+
+	rateCtx, rateCancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	if err := h.acquireRate(rateCtx); err != nil {
+		rateCancel()
+		h.writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	rateCancel()
+	log.Printf("Cupo TowerCoverage adquirido (light) para Lat: %s, Lon: %s", reqBody.Lat, reqBody.Lon)
+
+	torres, err := h.Scraper.GetTowersData(h.DB, reqBody.Lat, reqBody.Lon)
 	if err != nil {
 		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("error obteniendo datos: %v", err))
 		return
 	}
 
-	h.writeJSON(w, http.StatusOK, torres)
+	out := make([]models.CoverageLightItem, 0, len(torres))
+	for _, t := range torres {
+		out = append(out, t.ToCoverageLight())
+	}
+	h.writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) acquireRate(ctx context.Context) error {
+	if h == nil || h.RateGate == nil {
+		return nil
+	}
+	return h.RateGate.Acquire(ctx)
 }
 
 var dispositivoAPQueryKeys = map[string]struct{}{

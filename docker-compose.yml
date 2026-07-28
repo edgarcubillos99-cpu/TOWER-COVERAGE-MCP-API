@@ -1,8 +1,27 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: tower-redis
+    restart: always
+    networks:
+      - tower-net
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    # Sin ports: no se publica en el host; solo accesible desde la red Docker.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   scraper:
     build: .
     container_name: tower-scraper
     restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
     ports:
       - "${APP_PORT}:${APP_PORT}"
     env_file:
@@ -11,6 +30,8 @@ services:
       - MCP_TRANSPORT=${MCP_TRANSPORT:-sse}
       - APP_PORT=${APP_PORT}
       - MCP_API_KEY=${MCP_API_KEY}
+      - TOWER_API_ACCOUNT=${TOWER_API_ACCOUNT}
+      - TOWER_API_KEY=${TOWER_API_KEY}
       - TOWER_USERNAME=${TOWER_USERNAME}
       - TOWER_PASSWORD=${TOWER_PASSWORD}
       - DB_PORT=${DB_PORT}
@@ -21,7 +42,32 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - SWAGGER_ENABLED=${SWAGGER_ENABLED:-true}
       - TOWER_COVERAGE_CONCURRENCY=${TOWER_COVERAGE_CONCURRENCY}
+      # Redis local del compose: solo GetSiteList.
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
+      # Redis remoto: coberturas por proximidad (no forzar; viene de .env).
+      - COVERAGE_REDIS_HOST=${COVERAGE_REDIS_HOST:-}
+      - COVERAGE_REDIS_PORT=${COVERAGE_REDIS_PORT:-6379}
+      - COVERAGE_REDIS_PASSWORD=${COVERAGE_REDIS_PASSWORD:-}
+      - COVERAGE_REDIS_DB=${COVERAGE_REDIS_DB:-0}
+      - COVERAGE_CACHE_RADIUS_M=${COVERAGE_CACHE_RADIUS_M:-25}
+      # RabbitMQ corporativo (rate limit global).
+      - RABBITMQ_URL=${RABBITMQ_URL:-}
+      - RABBITMQ_RATE_QUEUE=${RABBITMQ_RATE_QUEUE:-towercoverage.rate.tokens}
+      - COVERAGE_MAX_RPS=${COVERAGE_MAX_RPS:-2}
+      - COVERAGE_RATE_BURST=${COVERAGE_RATE_BURST:-2}
+      - RABBITMQ_RATE_LEADER=${RABBITMQ_RATE_LEADER:-false}
+    networks:
+      - tower-net
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes: #para poder ver los archivos de la aplicacion
       - ./:/app
+
+volumes:
+  redis_data:
+
+networks:
+  tower-net:
+    driver: bridge

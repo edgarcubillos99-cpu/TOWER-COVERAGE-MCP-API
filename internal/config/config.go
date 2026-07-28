@@ -28,22 +28,33 @@ func firstEnv(keys ...string) string {
 }
 
 type Config struct {
-	Username  string
-	Password  string
-	AppPort   string
-	MCPAPIKey string // Si no está vacía, /sse y /message exigen Authorization: Bearer <valor>
-	JWTSecret       string // Secreto compartido con otras APIs de la empresa para firmar/validar JWT en /api/*
-	SwaggerEnabled  bool   // Si false, no se exponen /swagger/ ni /openapi.yaml
-	DBHost          string
-	DBPort    string // vacío se interpreta como 3306 en db.NewDBClient
-	DBUser    string
-	DBPass    string
-	DBName    string
-	// Redis: si RedisAddr está vacío, la caché queda deshabilitada y todo consulta MySQL.
-	RedisAddr       string
-	RedisPassword   string
-	RedisDB         int
-	RedisTTLMinutes int // 0 = sin expiración (la caché vive hasta el próximo arranque/warm)
+	Username       string
+	Password       string
+	APIAccount     string
+	APIKey         string
+	AppPort        string
+	MCPAPIKey      string // Si no está vacía, /sse y /message exigen Authorization: Bearer <valor>
+	JWTSecret      string // Secreto compartido con otras APIs de la empresa para firmar/validar JWT en /api/*
+	SwaggerEnabled bool   // Si false, no se exponen /swagger/ ni /openapi.yaml
+	DBHost         string
+	DBPort         string // vacío se interpreta como 3306 en db.NewDBClient
+	DBUser         string
+	DBPass         string
+	DBName         string
+	RedisAddr      string // Redis local/Docker: cache GetSiteList (host:port)
+	RedisPassword  string
+	RedisDB        int
+	// CoverageRedis*: Redis remoto para cache de coberturas por proximidad.
+	CoverageRedisHost     string
+	CoverageRedisPort     string
+	CoverageRedisPassword string
+	CoverageRedisDB       int
+	// RabbitMQ: límite global de peticiones TowerCoverage entre instancias.
+	RabbitMQURL        string
+	RabbitMQRateQueue  string
+	CoverageMaxRPS     float64
+	CoverageRateBurst  int
+	RabbitMQRateLeader bool
 }
 
 func LoadConfig() *Config {
@@ -52,46 +63,76 @@ func LoadConfig() *Config {
 	appPort := getEnvOrDefault("APP_PORT", "8080")
 	username := os.Getenv("TOWER_USERNAME")
 	password := os.Getenv("TOWER_PASSWORD")
+	apiAccount := os.Getenv("TOWER_API_ACCOUNT")
+	apiKey := os.Getenv("TOWER_API_KEY")
 	dbHost := os.Getenv("DB_HOST")
 	dbPort := os.Getenv("DB_PORT")
 	dbUser := os.Getenv("DB_USER")
 	dbPass := firstEnv("DB_PASS", "DB_PASSWORD", "MYSQL_ROOT_PASSWORD")
 	dbName := os.Getenv("DB_NAME")
+	redisAddr := getEnvOrDefault("REDIS_ADDR", "redis:6379")
+	redisPassword := os.Getenv("REDIS_PASSWORD")
+	redisDB := envInt("REDIS_DB", 0)
 
-	if username == "" || password == "" {
-		log.Fatal("Faltan credenciales TOWER_USERNAME o TOWER_PASSWORD en el entorno")
+	coverageRedisHost := strings.TrimSpace(firstEnv("COVERAGE_REDIS_HOST", "REDIS_COVERAGE_HOST"))
+	coverageRedisPort := getEnvOrDefault("COVERAGE_REDIS_PORT", "6379")
+	coverageRedisPassword := firstEnv("COVERAGE_REDIS_PASSWORD", "REDIS_COVERAGE_PASSWORD")
+	coverageRedisDB := envInt("COVERAGE_REDIS_DB", 0)
+
+	rabbitURL := strings.TrimSpace(firstEnv("RABBITMQ_URL", "AMQP_URL"))
+	rabbitRateQueue := getEnvOrDefault("RABBITMQ_RATE_QUEUE", "towercoverage.rate.tokens")
+	coverageMaxRPS := envFloat("COVERAGE_MAX_RPS", 2)
+	coverageRateBurst := envInt("COVERAGE_RATE_BURST", 0)
+	if coverageRateBurst <= 0 {
+		coverageRateBurst = int(coverageMaxRPS)
+		if coverageRateBurst < 1 {
+			coverageRateBurst = 1
+		}
+	}
+
+	if apiAccount == "" || apiKey == "" {
+		log.Fatal("Faltan TOWER_API_ACCOUNT o TOWER_API_KEY en el entorno")
 	}
 
 	return &Config{
-		Username:  username,
-		Password:  password,
-		AppPort:   appPort,
-		MCPAPIKey: os.Getenv("MCP_API_KEY"),
-		JWTSecret:      os.Getenv("JWT_SECRET"),
-		SwaggerEnabled: envBool("SWAGGER_ENABLED", true),
-		DBHost:         dbHost,
-		DBPort:    dbPort,
-		DBUser:    dbUser,
-		DBPass:    dbPass,
-		DBName:    dbName,
-		RedisAddr:       os.Getenv("REDIS_ADDR"),
-		RedisPassword:   firstEnv("REDIS_PASSWORD", "REDIS_PASS"),
-		RedisDB:         envInt("REDIS_DB", 0),
-		RedisTTLMinutes: envInt("REDIS_TTL_MINUTES", 0),
+		Username:              username,
+		Password:              password,
+		APIAccount:            apiAccount,
+		APIKey:                apiKey,
+		AppPort:               appPort,
+		MCPAPIKey:             os.Getenv("MCP_API_KEY"),
+		JWTSecret:             os.Getenv("JWT_SECRET"),
+		SwaggerEnabled:        envBool("SWAGGER_ENABLED", true),
+		DBHost:                dbHost,
+		DBPort:                dbPort,
+		DBUser:                dbUser,
+		DBPass:                dbPass,
+		DBName:                dbName,
+		RedisAddr:             redisAddr,
+		RedisPassword:         redisPassword,
+		RedisDB:               redisDB,
+		CoverageRedisHost:     coverageRedisHost,
+		CoverageRedisPort:     coverageRedisPort,
+		CoverageRedisPassword: coverageRedisPassword,
+		CoverageRedisDB:       coverageRedisDB,
+		RabbitMQURL:           rabbitURL,
+		RabbitMQRateQueue:     rabbitRateQueue,
+		CoverageMaxRPS:        coverageMaxRPS,
+		CoverageRateBurst:     coverageRateBurst,
+		RabbitMQRateLeader:    envBool("RABBITMQ_RATE_LEADER", false),
 	}
 }
 
-// envInt lee una variable entera; si falta o es inválida devuelve el valor por defecto.
-func envInt(key string, defaultVal int) int {
-	v, ok := os.LookupEnv(key)
-	if !ok || strings.TrimSpace(v) == "" {
-		return defaultVal
+// CoverageRedisAddr construye host:port del Redis remoto de coberturas.
+func (c *Config) CoverageRedisAddr() string {
+	if c == nil || strings.TrimSpace(c.CoverageRedisHost) == "" {
+		return ""
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(v))
-	if err != nil {
-		return defaultVal
+	port := strings.TrimSpace(c.CoverageRedisPort)
+	if port == "" {
+		port = "6379"
 	}
-	return n
+	return strings.TrimSpace(c.CoverageRedisHost) + ":" + port
 }
 
 // Función auxiliar para mantener limpio el código
@@ -116,4 +157,28 @@ func envBool(key string, defaultVal bool) bool {
 	default:
 		return defaultVal
 	}
+}
+
+func envInt(key string, defaultVal int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return defaultVal
+	}
+	return n
+}
+
+func envFloat(key string, defaultVal float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return defaultVal
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil || n <= 0 {
+		return defaultVal
+	}
+	return n
 }

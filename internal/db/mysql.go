@@ -5,13 +5,11 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"time"
 	"tower-scraper/internal/config"
 
 	"tower-scraper/internal/models"
 
 	"github.com/go-sql-driver/mysql"
-	"github.com/redis/go-redis/v9"
 )
 
 type APInfo struct {
@@ -26,9 +24,6 @@ type APInfo struct {
 
 type DBClient struct {
 	conn *sql.DB
-	// Caché opcional en Redis. Si rdb es nil, todas las consultas van a MySQL.
-	rdb      *redis.Client
-	cacheTTL time.Duration
 }
 
 func mysqlAddr(host, port string) string {
@@ -68,46 +63,20 @@ func NewDBClient(cfg *config.Config) (*DBClient, error) {
 	return &DBClient{conn: db}, nil
 }
 
-// cleanTowerNameForDB replica la limpieza histórica del nombre para el WHERE de MySQL:
-// quita el prefijo "OSN." y recorta espacios, preservando mayúsculas/minúsculas para no
-// alterar el comportamiento de la colación de la base de datos.
-func cleanTowerNameForDB(nombreTorreTC string) string {
-	return strings.TrimSpace(strings.ReplaceAll(nombreTorreTC, "OSN.", ""))
-}
-
-// cacheKeyTowerName deriva la clave de Redis a partir del nombre ya limpio, en minúsculas
-// para que la precarga (por torre_nombre de la BD) y la consulta (por nombre de TowerCoverage)
-// coincidan siempre, sin depender de mayúsculas.
-func cacheKeyTowerName(nombreLimpio string) string {
-	return "tower_aps:" + strings.ToLower(strings.TrimSpace(nombreLimpio))
-}
-
-// ObtenerAPsPorTorre devuelve los APs de una torre. Si Redis está habilitado, intenta
-// primero la caché; ante fallo o ausencia, cae a MySQL y repuebla la caché.
+// ObtenerAPsPorTorre cruza la tabla de torres_ap con ap_info
 func (c *DBClient) ObtenerAPsPorTorre(nombreTorreTC string) ([]APInfo, error) {
-	nombreLimpio := cleanTowerNameForDB(nombreTorreTC)
-	key := cacheKeyTowerName(nombreLimpio)
+	nombreLimpio := strings.ReplaceAll(nombreTorreTC, "OSN.", "")
+	nombreLimpio = strings.TrimSpace(nombreLimpio)
 
-	if aps, ok := c.apsFromCache(key); ok {
-		return aps, nil
-	}
-
-	aps, err := c.obtenerAPsPorTorreDB(nombreLimpio)
-	if err != nil {
-		return nil, err
-	}
-
-	c.storeAPsInCache(key, aps)
-	return aps, nil
-}
-
-// obtenerAPsPorTorreDB ejecuta la consulta real contra MySQL (fuente de verdad).
-func (c *DBClient) obtenerAPsPorTorreDB(nombreLimpio string) ([]APInfo, error) {
+	// CAMBIO 1: Reemplazar 'LIKE' por '=' en la consulta SQL
 	query := `SELECT a.ap_name, a.azimut, a.tilt, a.altura, a.tipo, a.ip_address
           FROM dispositivos_ap a 
           WHERE a.torre_nombre = ?`
 
-	rows, err := c.conn.Query(query, nombreLimpio)
+	// CAMBIO 2: Quitar los comodines "%" para hacer una búsqueda exacta
+	searchParam := nombreLimpio
+
+	rows, err := c.conn.Query(query, searchParam)
 	if err != nil {
 		return nil, fmt.Errorf("error consultando APs: %w", err)
 	}

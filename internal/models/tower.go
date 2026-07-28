@@ -1,6 +1,8 @@
 package models
 
-// TowerCoverage representa los datos que extraeremos de cada torre
+import "strings"
+
+// TowerCoverage representa los datos internos de una torre con enlace viable.
 type TowerCoverage struct {
 	TowerName string
 	Latitude  string
@@ -10,6 +12,80 @@ type TowerCoverage struct {
 	Distance  string
 	Signal    string
 	Status    string
+
+	// Campos LinkPath para armar la respuesta de POST /api/coverage.
+	Group           string
+	Elevation       string
+	TowerHeight     string
+	ClientHeight    string
+	SuggestedHeight string
+	DistanceKm      string
+	PathImage       string
+}
+
+// CoverageLightItem es la respuesta de POST /api/coverage, organizada como el
+// resumen visual de Link Path (torre / cliente / rendimiento + imagen).
+type CoverageLightItem struct {
+	TowerName   string                   `json:"tower_name"`
+	Group       string                   `json:"group,omitempty"`
+	PathImage   string                   `json:"path_image"`
+	Tower       CoverageLightTower       `json:"tower"`
+	Client      CoverageLightClient      `json:"client"`
+	Performance CoverageLightPerformance `json:"performance"`
+}
+
+type CoverageLightTower struct {
+	Location  string `json:"location"`
+	Elevation string `json:"elevation"`
+	Height    string `json:"height"`
+}
+
+type CoverageLightClient struct {
+	Alignment string `json:"alignment"`
+	Tilt      string `json:"tilt"`
+	Height    string `json:"height"`
+}
+
+type CoverageLightPerformance struct {
+	Status          string `json:"status"`
+	Signal          string `json:"signal"`
+	Distance        string `json:"distance"`
+	DistanceMi      string `json:"distance_mi"`
+	SuggestedHeight string `json:"suggested_height"`
+}
+
+// ToCoverageLight convierte el modelo interno al JSON del endpoint ligero.
+func (t TowerCoverage) ToCoverageLight() CoverageLightItem {
+	loc := strings.TrimSpace(t.Latitude)
+	if lon := strings.TrimSpace(t.Longitude); lon != "" {
+		if loc != "" {
+			loc = loc + ", " + lon
+		} else {
+			loc = lon
+		}
+	}
+	return CoverageLightItem{
+		TowerName: t.TowerName,
+		Group:     t.Group,
+		PathImage: t.PathImage,
+		Tower: CoverageLightTower{
+			Location:  loc,
+			Elevation: t.Elevation,
+			Height:    t.TowerHeight,
+		},
+		Client: CoverageLightClient{
+			Alignment: t.Alignment,
+			Tilt:      t.Tilt,
+			Height:    t.ClientHeight,
+		},
+		Performance: CoverageLightPerformance{
+			Status:          t.Status,
+			Signal:          t.Signal,
+			Distance:        t.DistanceKm,
+			DistanceMi:      t.Distance,
+			SuggestedHeight: t.SuggestedHeight,
+		},
+	}
 }
 
 type RespuestaMCP struct {

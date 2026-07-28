@@ -1,10 +1,13 @@
 package coverage
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"sync"
+	"time"
 
+	"tower-scraper/internal/concurrency"
 	"tower-scraper/internal/db"
 	"tower-scraper/internal/models"
 	"tower-scraper/internal/scraper"
@@ -23,25 +26,34 @@ type consultaBloque struct {
 }
 
 // RunConsultas ejecuta el pipeline completo de cobertura (scraper + BD + SNMP).
-func RunConsultas(ts *scraper.TowerScraper, dbClient *db.DBClient, coords []Coord) ([]byte, error) {
+// Antes de consultar TowerCoverage, reutiliza resultados Redis si hay un punto
+// previo dentro del radio configurado (COVERAGE_CACHE_RADIUS_M, default 25 m).
+// Si gate != nil, tras un cache miss espera un cupo global (RabbitMQ) antes de llamar a la API.
+func RunConsultas(ts *scraper.TowerScraper, dbClient *db.DBClient, coords []Coord, gate RateGate) ([]byte, error) {
 	if len(coords) == 0 {
 		return nil, errSinCoordenadas
 	}
+	store := NewResultStore(ts.CoverageRedis())
 	if len(coords) == 1 {
-		res, err := runForCoord(ts, dbClient, coords[0].Lat, coords[0].Lon)
+		res, err := runForCoord(ts, dbClient, store, gate, coords[0].Lat, coords[0].Lon)
 		if err != nil {
 			return nil, err
 		}
 		return json.MarshalIndent(res, "", "  ")
 	}
 
+	limit := concurrency.FromEnv()
+	sem := make(chan struct{}, limit)
 	out := make([]consultaBloque, len(coords))
 	var wg sync.WaitGroup
 	for i, c := range coords {
 		wg.Add(1)
 		go func(i int, lat, lon string) {
 			defer wg.Done()
-			res, err := runForCoord(ts, dbClient, lat, lon)
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			res, err := runForCoord(ts, dbClient, store, gate, lat, lon)
 			out[i].Lat, out[i].Lon = lat, lon
 			if err != nil {
 				out[i].Error = err.Error()
@@ -58,8 +70,27 @@ func RunConsultas(ts *scraper.TowerScraper, dbClient *db.DBClient, coords []Coor
 	return json.MarshalIndent(wrapped, "", "  ")
 }
 
-func runForCoord(ts *scraper.TowerScraper, dbClient *db.DBClient, lat, lon string) ([]models.RespuestaMCP, error) {
-	torres, err := ts.GetTowersData(lat, lon)
+func runForCoord(ts *scraper.TowerScraper, dbClient *db.DBClient, store *ResultStore, gate RateGate, lat, lon string) ([]models.RespuestaMCP, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	cached, distM, err := store.FindNearestFromStrings(ctx, lat, lon)
+	cancel()
+	if err != nil {
+		log.Printf("⚠️ Cache cobertura (full): %v — se procesará de nuevo", err)
+	} else if cached != nil {
+		log.Printf("Cache hit cobertura full (%.1f m de punto previo; radio %.0f m) → %d antenas",
+			distM, store.RadiusM(), len(cached.Resultados))
+		return cached.Resultados, nil
+	}
+
+	rateCtx, rateCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	err = acquireTowerSlot(rateCtx, gate)
+	rateCancel()
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("Cupo TowerCoverage adquirido (full) para Lat: %s, Lon: %s", lat, lon)
+
+	torres, err := ts.GetTowersData(dbClient, lat, lon)
 	if err != nil {
 		return nil, err
 	}
@@ -102,5 +133,12 @@ func runForCoord(ts *scraper.TowerScraper, dbClient *db.DBClient, lat, lon strin
 	}
 
 	wg.Wait()
+
+	saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := store.Save(saveCtx, lat, lon, towersToLight(torres), resultadosFinales); err != nil {
+		log.Printf("⚠️ No se pudo cachear cobertura full en Redis: %v", err)
+	}
+	saveCancel()
+
 	return resultadosFinales, nil
 }
