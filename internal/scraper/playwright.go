@@ -276,6 +276,7 @@ func (s *TowerScraper) processSingleAP(workerID int, towerURL, safeName string, 
 		Tipo:        ap.Tipo,
 		Cobertura:   false,
 		NombreTorre: torre.TowerName,
+		PathImage:   torre.PathImage,
 	}
 
 	beamwidth := geo.ObtenerApertura(ap.Tipo, ap.APName)
@@ -447,6 +448,7 @@ func (s *TowerScraper) processSingleAP(workerID int, towerURL, safeName string, 
 		Distancia:   distanciaKm,
 		Cobertura:   coberturaViable,
 		NombreTorre: torre.TowerName,
+		PathImage:   torre.PathImage,
 	}
 
 	if coberturaViable && strings.TrimSpace(ap.IPAddress) != "" {

@@ -182,3 +182,29 @@ func towersToLight(torres []models.TowerCoverage) []models.CoverageLightItem {
 	}
 	return out
 }
+
+// enrichResultadosPathImage rellena path_image en cada antena desde las torres
+// cacheadas (útil para entradas previas a que RespuestaMCP incluyera el campo).
+func enrichResultadosPathImage(resultados []models.RespuestaMCP, towers []models.CoverageLightItem) []models.RespuestaMCP {
+	if len(resultados) == 0 || len(towers) == 0 {
+		return resultados
+	}
+	byName := make(map[string]string, len(towers))
+	for _, t := range towers {
+		if img := strings.TrimSpace(t.PathImage); img != "" {
+			byName[t.TowerName] = img
+		}
+	}
+	if len(byName) == 0 {
+		return resultados
+	}
+	for i := range resultados {
+		if strings.TrimSpace(resultados[i].PathImage) != "" {
+			continue
+		}
+		if img, ok := byName[resultados[i].NombreTorre]; ok {
+			resultados[i].PathImage = img
+		}
+	}
+	return resultados
+}

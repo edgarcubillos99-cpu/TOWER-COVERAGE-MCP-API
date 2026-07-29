@@ -72,7 +72,7 @@ func (h *Handler) CoverageFull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	payload, err := coverage.RunConsultas(h.Scraper, h.DB, coords, h.RateGate)
+	payload, err := coverage.RunConsultas(h.Scraper, h.DB, coords, h.RateGate, true)
 	if err != nil {
 		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("fallo consulta cobertura: %v", err))
 		return

@@ -585,6 +585,12 @@ components:
           type: boolean
         nombre_torre:
           type: string
+        path_image:
+          type: string
+          description: |
+            Solo REST POST /api/coverage/full (no se incluye en la herramienta MCP get_tower_coverage).
+            Imagen del perfil de enlace en base64 (campo pathimage de LinkPathAPI)
+            de la torre a la que pertenece la antena; mismo valor que en CoverageLightItem.
         clientes_conectados:
           type: integer
           nullable: true

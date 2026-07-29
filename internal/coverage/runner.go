@@ -25,11 +25,19 @@ type consultaBloque struct {
 	Error      string                `json:"error,omitempty"`
 }
 
+type consultaBloqueAPI struct {
+	Lat        string                `json:"lat"`
+	Lon        string                `json:"lon"`
+	Resultados []models.RespuestaAPI `json:"resultados"`
+	Error      string                `json:"error,omitempty"`
+}
+
 // RunConsultas ejecuta el pipeline completo de cobertura (scraper + BD + SNMP).
 // Antes de consultar TowerCoverage, reutiliza resultados Redis si hay un punto
 // previo dentro del radio configurado (COVERAGE_CACHE_RADIUS_M, default 25 m).
 // Si gate != nil, tras un cache miss espera un cupo global (RabbitMQ) antes de llamar a la API.
-func RunConsultas(ts *scraper.TowerScraper, dbClient *db.DBClient, coords []Coord, gate RateGate) ([]byte, error) {
+// includePathImage=true solo para POST /api/coverage/full; el MCP debe pasar false.
+func RunConsultas(ts *scraper.TowerScraper, dbClient *db.DBClient, coords []Coord, gate RateGate, includePathImage bool) ([]byte, error) {
 	if len(coords) == 0 {
 		return nil, errSinCoordenadas
 	}
@@ -38,6 +46,9 @@ func RunConsultas(ts *scraper.TowerScraper, dbClient *db.DBClient, coords []Coor
 		res, err := runForCoord(ts, dbClient, store, gate, coords[0].Lat, coords[0].Lon)
 		if err != nil {
 			return nil, err
+		}
+		if includePathImage {
+			return json.MarshalIndent(models.ToAPISlice(res), "", "  ")
 		}
 		return json.MarshalIndent(res, "", "  ")
 	}
@@ -64,6 +75,22 @@ func RunConsultas(ts *scraper.TowerScraper, dbClient *db.DBClient, coords []Coor
 	}
 	wg.Wait()
 
+	if includePathImage {
+		apiOut := make([]consultaBloqueAPI, len(out))
+		for i, b := range out {
+			apiOut[i] = consultaBloqueAPI{
+				Lat:        b.Lat,
+				Lon:        b.Lon,
+				Resultados: models.ToAPISlice(b.Resultados),
+				Error:      b.Error,
+			}
+		}
+		wrapped := struct {
+			Consultas []consultaBloqueAPI `json:"consultas"`
+		}{Consultas: apiOut}
+		return json.MarshalIndent(wrapped, "", "  ")
+	}
+
 	wrapped := struct {
 		Consultas []consultaBloque `json:"consultas"`
 	}{Consultas: out}
@@ -79,7 +106,7 @@ func runForCoord(ts *scraper.TowerScraper, dbClient *db.DBClient, store *ResultS
 	} else if cached != nil {
 		log.Printf("Cache hit cobertura full (%.1f m de punto previo; radio %.0f m) → %d antenas",
 			distM, store.RadiusM(), len(cached.Resultados))
-		return cached.Resultados, nil
+		return enrichResultadosPathImage(cached.Resultados, cached.Towers), nil
 	}
 
 	rateCtx, rateCancel := context.WithTimeout(context.Background(), 2*time.Minute)

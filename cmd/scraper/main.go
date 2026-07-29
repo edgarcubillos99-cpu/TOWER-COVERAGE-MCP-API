@@ -96,7 +96,7 @@ func main() {
 			log.Printf("🤖 MCP Request -> %d ubicaciones en paralelo", len(coords))
 		}
 
-		resultJSON, err := coverage.RunConsultas(ts, dbClient, toCoverageCoords(coords), rateGate)
+		resultJSON, err := coverage.RunConsultas(ts, dbClient, toCoverageCoords(coords), rateGate, false)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("Fallo consulta cobertura: %v", err)), nil
 		}

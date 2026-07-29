@@ -74,6 +74,7 @@ func TestCachedCoverageJSONRoundTrip(t *testing.T) {
 			Distancia:   1.5,
 			Cobertura:   true,
 			NombreTorre: "OSN.A",
+			PathImage:   "abc",
 		}},
 		CachedAt: time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC),
 	}
@@ -93,5 +94,31 @@ func TestCachedCoverageJSONRoundTrip(t *testing.T) {
 	}
 	if len(got.Resultados) != 1 || !got.Resultados[0].Cobertura {
 		t.Fatalf("resultados: %+v", got.Resultados)
+	}
+	// PathImage en RespuestaMCP es json:"-" (solo API vía ToAPI); no round-trip en cache JSON.
+	if got.Resultados[0].PathImage != "" {
+		t.Fatalf("path_image no debe persistir en JSON de resultados: %q", got.Resultados[0].PathImage)
+	}
+}
+
+func TestEnrichResultadosPathImage(t *testing.T) {
+	resultados := []models.RespuestaMCP{
+		{Antena: "AP1", NombreTorre: "OSN.A"},
+		{Antena: "AP2", NombreTorre: "OSN.B", PathImage: "ya-tiene"},
+		{Antena: "AP3", NombreTorre: "OSN.C"},
+	}
+	towers := []models.CoverageLightItem{
+		{TowerName: "OSN.A", PathImage: "img-a"},
+		{TowerName: "OSN.B", PathImage: "img-b"},
+	}
+	got := enrichResultadosPathImage(resultados, towers)
+	if got[0].PathImage != "img-a" {
+		t.Fatalf("AP1 path_image: %q", got[0].PathImage)
+	}
+	if got[1].PathImage != "ya-tiene" {
+		t.Fatalf("AP2 no debe sobrescribirse: %q", got[1].PathImage)
+	}
+	if got[2].PathImage != "" {
+		t.Fatalf("AP3 sin torre: %q", got[2].PathImage)
 	}
 }

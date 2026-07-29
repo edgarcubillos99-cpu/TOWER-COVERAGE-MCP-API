@@ -90,16 +90,55 @@ func (t TowerCoverage) ToCoverageLight() CoverageLightItem {
 
 type RespuestaMCP struct {
 	// Torre se usa solo en procesamiento interno; no se serializa en la API/MCP.
-	Torre              DatosTorre `json:"-"`
-	Antena             string     `json:"antena"`
-	Tipo               string     `json:"tipo_de_antena"`
-	Distancia          float64    `json:"distancia_entre_antena_y_cliente_km"`
-	Cobertura          bool       `json:"cliente_con_cobertura"`
-	NombreTorre        string     `json:"nombre_torre"`
-	ClientesConectados *int       `json:"clientes_conectados,omitempty"`
+	Torre       DatosTorre `json:"-"`
+	Antena      string     `json:"antena"`
+	Tipo        string     `json:"tipo_de_antena"`
+	Distancia   float64    `json:"distancia_entre_antena_y_cliente_km"`
+	Cobertura   bool       `json:"cliente_con_cobertura"`
+	NombreTorre string     `json:"nombre_torre"`
+	// PathImage solo se expone en POST /api/coverage/full (ver ToAPI); no va en MCP.
+	PathImage          string `json:"-"`
+	ClientesConectados *int   `json:"clientes_conectados,omitempty"`
 	// SNMP / capacidad: esta_saturado solo cuando hubo lectura OID y regla de umbral (EvaluateAP).
 	EstaSaturado    *bool  `json:"esta_saturado,omitempty"`
 	EstadoCapacidad string `json:"estado_capacidad,omitempty"`
+}
+
+// RespuestaAPI es el JSON de cada antena en POST /api/coverage/full (incluye path_image).
+type RespuestaAPI struct {
+	Antena             string  `json:"antena"`
+	Tipo               string  `json:"tipo_de_antena"`
+	Distancia          float64 `json:"distancia_entre_antena_y_cliente_km"`
+	Cobertura          bool    `json:"cliente_con_cobertura"`
+	NombreTorre        string  `json:"nombre_torre"`
+	PathImage          string  `json:"path_image"`
+	ClientesConectados *int    `json:"clientes_conectados,omitempty"`
+	EstaSaturado       *bool   `json:"esta_saturado,omitempty"`
+	EstadoCapacidad    string  `json:"estado_capacidad,omitempty"`
+}
+
+// ToAPI convierte la respuesta interna al DTO REST con path_image.
+func (r RespuestaMCP) ToAPI() RespuestaAPI {
+	return RespuestaAPI{
+		Antena:             r.Antena,
+		Tipo:               r.Tipo,
+		Distancia:          r.Distancia,
+		Cobertura:          r.Cobertura,
+		NombreTorre:        r.NombreTorre,
+		PathImage:          r.PathImage,
+		ClientesConectados: r.ClientesConectados,
+		EstaSaturado:       r.EstaSaturado,
+		EstadoCapacidad:    r.EstadoCapacidad,
+	}
+}
+
+// ToAPISlice convierte un slice de respuestas internas al DTO REST.
+func ToAPISlice(in []RespuestaMCP) []RespuestaAPI {
+	out := make([]RespuestaAPI, len(in))
+	for i := range in {
+		out[i] = in[i].ToAPI()
+	}
+	return out
 }
 
 type DatosTorre struct {
