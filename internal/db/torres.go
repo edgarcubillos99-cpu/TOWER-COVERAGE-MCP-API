@@ -49,7 +49,7 @@ func (c *DBClient) ListTorres(filters map[string]string) ([]models.TorreDB, erro
 	}
 	query += " ORDER BY id"
 
-	rows, err := c.conn.Query(query, args...)
+	rows, err := c.query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("error consultando torres: %w", err)
 	}
@@ -73,7 +73,7 @@ func (c *DBClient) ListTorres(filters map[string]string) ([]models.TorreDB, erro
 // lookup O(1). Incluye cada nombre tal cual y, si no empieza por OSN., también
 // la variante con prefijo "OSN." para casar con nombres de la API.
 func (c *DBClient) NombresTorresSet() (map[string]struct{}, error) {
-	rows, err := c.conn.Query(`SELECT nombre FROM torres`)
+	rows, err := c.query(`SELECT nombre FROM torres`)
 	if err != nil {
 		return nil, fmt.Errorf("error consultando nombres de torres: %w", err)
 	}
@@ -140,7 +140,7 @@ func (c *DBClient) ObtenerTorrePorNombre(nombreTC string) (*models.TorreDB, erro
 		query := `SELECT id, nombre, latitud, longitud FROM torres WHERE nombre = ? LIMIT 1`
 		var t models.TorreDB
 		var lat, lon sql.NullString
-		err := c.conn.QueryRow(query, name).Scan(&t.ID, &t.Nombre, &lat, &lon)
+		err := c.queryRowScan(query, []any{name}, &t.ID, &t.Nombre, &lat, &lon)
 		if err == sql.ErrNoRows {
 			continue
 		}

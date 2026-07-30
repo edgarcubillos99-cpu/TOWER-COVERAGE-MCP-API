@@ -54,7 +54,7 @@ func (c *DBClient) ListDispositivosAP(filters map[string]string) ([]models.Dispo
 	}
 	query += " ORDER BY id"
 
-	rows, err := c.conn.Query(query, args...)
+	rows, err := c.query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("error consultando dispositivos_ap: %w", err)
 	}

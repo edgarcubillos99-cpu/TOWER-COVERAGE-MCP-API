@@ -2,14 +2,33 @@ package db
 
 import (
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
+	"time"
 	"tower-scraper/internal/config"
 
 	"tower-scraper/internal/models"
 
 	"github.com/go-sql-driver/mysql"
+)
+
+// Límites del pool. connMaxIdleTime y connMaxLifetime deben quedar por debajo del
+// wait_timeout del servidor para no reutilizar conexiones que este ya cerró.
+const (
+	dbMaxOpenConns    = 20
+	dbMaxIdleConns    = 5
+	dbConnMaxIdleTime = time.Minute
+	dbConnMaxLifetime = 3 * time.Minute
+)
+
+// Reintentos ante conexión cerrada por el servidor.
+const (
+	dbQueryAttempts = 3
+	dbRetryDelay    = 100 * time.Millisecond
 )
 
 type APInfo struct {
@@ -48,11 +67,16 @@ func NewDBClient(cfg *config.Config) (*DBClient, error) {
 		Addr:                 mysqlAddr(cfg.DBHost, cfg.DBPort),
 		DBName:               cfg.DBName,
 		AllowNativePasswords: true,
+		Timeout:              10 * time.Second,
 	}
 	db, err := sql.Open("mysql", cnf.FormatDSN())
 	if err != nil {
 		return nil, fmt.Errorf("error conectando a MySQL: %w", err)
 	}
+	db.SetMaxOpenConns(dbMaxOpenConns)
+	db.SetMaxIdleConns(dbMaxIdleConns)
+	db.SetConnMaxIdleTime(dbConnMaxIdleTime)
+	db.SetConnMaxLifetime(dbConnMaxLifetime)
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		if cfg.DBPass == "" {
@@ -61,6 +85,55 @@ func NewDBClient(cfg *config.Config) (*DBClient, error) {
 		return nil, fmt.Errorf("error haciendo ping a MySQL: %w", err)
 	}
 	return &DBClient{conn: db}, nil
+}
+
+// isConnDeadErr identifica conexiones que el servidor ya cerró (wait_timeout,
+// reinicio, kill). MySQL suele devolver 2006/2013; 4031 también se observa en
+// algunos despliegues compatibles. database/sql no los reintenta por su cuenta.
+func isConnDeadErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, driver.ErrBadConn) || errors.Is(err, mysql.ErrInvalidConn) || errors.Is(err, io.EOF) {
+		return true
+	}
+	var myErr *mysql.MySQLError
+	if errors.As(err, &myErr) {
+		switch myErr.Number {
+		case 1927, 2006, 2013, 4031:
+			return true
+		}
+	}
+	return false
+}
+
+func (c *DBClient) query(query string, args ...any) (*sql.Rows, error) {
+	var rows *sql.Rows
+	var err error
+	for attempt := 0; attempt < dbQueryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(dbRetryDelay)
+		}
+		rows, err = c.conn.Query(query, args...)
+		if !isConnDeadErr(err) {
+			return rows, err
+		}
+	}
+	return rows, err
+}
+
+func (c *DBClient) queryRowScan(query string, args []any, dest ...any) error {
+	var err error
+	for attempt := 0; attempt < dbQueryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(dbRetryDelay)
+		}
+		err = c.conn.QueryRow(query, args...).Scan(dest...)
+		if !isConnDeadErr(err) {
+			return err
+		}
+	}
+	return err
 }
 
 // ObtenerAPsPorTorre cruza la tabla de torres_ap con ap_info
@@ -76,7 +149,7 @@ func (c *DBClient) ObtenerAPsPorTorre(nombreTorreTC string) ([]APInfo, error) {
 	// CAMBIO 2: Quitar los comodines "%" para hacer una búsqueda exacta
 	searchParam := nombreLimpio
 
-	rows, err := c.conn.Query(query, searchParam)
+	rows, err := c.query(query, searchParam)
 	if err != nil {
 		return nil, fmt.Errorf("error consultando APs: %w", err)
 	}
