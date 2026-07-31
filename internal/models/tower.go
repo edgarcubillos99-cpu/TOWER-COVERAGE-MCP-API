@@ -88,6 +88,14 @@ func (t TowerCoverage) ToCoverageLight() CoverageLightItem {
 	}
 }
 
+// CoverageFullSiteClient es el bloque client de /api/coverage/full.
+// Equivale a CoverageLightClient, pero tilt se expone como site_tilt.
+type CoverageFullSiteClient struct {
+	Alignment string `json:"alignment"`
+	SiteTilt  string `json:"site_tilt"`
+	Height    string `json:"height"`
+}
+
 type RespuestaMCP struct {
 	// Torre se usa solo en procesamiento interno; no se serializa en la API/MCP.
 	Torre       DatosTorre `json:"-"`
@@ -96,28 +104,58 @@ type RespuestaMCP struct {
 	Distancia   float64    `json:"distancia_entre_antena_y_cliente_km"`
 	Cobertura   bool       `json:"cliente_con_cobertura"`
 	NombreTorre string     `json:"nombre_torre"`
-	// PathImage solo se expone en POST /api/coverage/full (ver ToAPI); no va en MCP.
-	PathImage          string `json:"-"`
-	ClientesConectados *int   `json:"clientes_conectados,omitempty"`
+	// Campos de sitio (LinkPath) solo se exponen en POST /api/coverage/full (ver ToAPI); no van en MCP.
+	PathImage          string                   `json:"-"`
+	Group              string                   `json:"-"`
+	Tower              CoverageLightTower       `json:"-"`
+	Client             CoverageFullSiteClient   `json:"-"`
+	Performance        CoverageLightPerformance `json:"-"`
+	ClientesConectados *int                     `json:"clientes_conectados,omitempty"`
 	// SNMP / capacidad: esta_saturado solo cuando hubo lectura OID y regla de umbral (EvaluateAP).
 	EstaSaturado    *bool  `json:"esta_saturado,omitempty"`
 	EstadoCapacidad string `json:"estado_capacidad,omitempty"`
 }
 
-// RespuestaAPI es el JSON de cada antena en POST /api/coverage/full (incluye path_image).
+// RespuestaAPI es el JSON de cada antena en POST /api/coverage/full
+// (incluye path_image y el resumen de sitio de /api/coverage, con site_tilt).
 type RespuestaAPI struct {
-	Antena             string  `json:"antena"`
-	Tipo               string  `json:"tipo_de_antena"`
-	Distancia          float64 `json:"distancia_entre_antena_y_cliente_km"`
-	Cobertura          bool    `json:"cliente_con_cobertura"`
-	NombreTorre        string  `json:"nombre_torre"`
-	PathImage          string  `json:"path_image"`
-	ClientesConectados *int    `json:"clientes_conectados,omitempty"`
-	EstaSaturado       *bool   `json:"esta_saturado,omitempty"`
-	EstadoCapacidad    string  `json:"estado_capacidad,omitempty"`
+	Antena             string                   `json:"antena"`
+	Tipo               string                   `json:"tipo_de_antena"`
+	Distancia          float64                  `json:"distancia_entre_antena_y_cliente_km"`
+	Cobertura          bool                     `json:"cliente_con_cobertura"`
+	NombreTorre        string                   `json:"nombre_torre"`
+	PathImage          string                   `json:"path_image"`
+	Group              string                   `json:"group,omitempty"`
+	Tower              CoverageLightTower       `json:"tower"`
+	Client             CoverageFullSiteClient   `json:"client"`
+	Performance        CoverageLightPerformance `json:"performance"`
+	ClientesConectados *int                     `json:"clientes_conectados,omitempty"`
+	EstaSaturado       *bool                    `json:"esta_saturado,omitempty"`
+	EstadoCapacidad    string                   `json:"estado_capacidad,omitempty"`
 }
 
-// ToAPI convierte la respuesta interna al DTO REST con path_image.
+// SiteFieldsFromTower copia el resumen LinkPath de la torre (mismo valor para todas
+// las antenas del sitio). tilt de /api/coverage se mapea a site_tilt.
+func SiteFieldsFromTower(t TowerCoverage) (group string, tower CoverageLightTower, client CoverageFullSiteClient, perf CoverageLightPerformance) {
+	return SiteFieldsFromLight(t.ToCoverageLight())
+}
+
+// SiteFieldsFromLight adapta un CoverageLightItem al bloque de sitio de /full.
+func SiteFieldsFromLight(t CoverageLightItem) (group string, tower CoverageLightTower, client CoverageFullSiteClient, perf CoverageLightPerformance) {
+	return t.Group, t.Tower, CoverageFullSiteClient{
+		Alignment: t.Client.Alignment,
+		SiteTilt:  t.Client.Tilt,
+		Height:    t.Client.Height,
+	}, t.Performance
+}
+
+// ApplySiteFields asigna en RespuestaMCP los campos de sitio provenientes de la torre.
+func (r *RespuestaMCP) ApplySiteFields(t TowerCoverage) {
+	r.PathImage = t.PathImage
+	r.Group, r.Tower, r.Client, r.Performance = SiteFieldsFromTower(t)
+}
+
+// ToAPI convierte la respuesta interna al DTO REST con path_image y datos de sitio.
 func (r RespuestaMCP) ToAPI() RespuestaAPI {
 	return RespuestaAPI{
 		Antena:             r.Antena,
@@ -126,6 +164,10 @@ func (r RespuestaMCP) ToAPI() RespuestaAPI {
 		Cobertura:          r.Cobertura,
 		NombreTorre:        r.NombreTorre,
 		PathImage:          r.PathImage,
+		Group:              r.Group,
+		Tower:              r.Tower,
+		Client:             r.Client,
+		Performance:        r.Performance,
 		ClientesConectados: r.ClientesConectados,
 		EstaSaturado:       r.EstaSaturado,
 		EstadoCapacidad:    r.EstadoCapacidad,

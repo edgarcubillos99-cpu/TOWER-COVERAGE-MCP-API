@@ -108,12 +108,24 @@ func TestEnrichResultadosPathImage(t *testing.T) {
 		{Antena: "AP3", NombreTorre: "OSN.C"},
 	}
 	towers := []models.CoverageLightItem{
-		{TowerName: "OSN.A", PathImage: "img-a"},
+		{
+			TowerName: "OSN.A",
+			PathImage: "img-a",
+			Group:     "Fiber",
+			Client:    models.CoverageLightClient{Tilt: "-0.1°", Alignment: "10°"},
+			Performance: models.CoverageLightPerformance{Status: "Good Link"},
+		},
 		{TowerName: "OSN.B", PathImage: "img-b"},
 	}
 	got := enrichResultadosPathImage(resultados, towers)
 	if got[0].PathImage != "img-a" {
 		t.Fatalf("AP1 path_image: %q", got[0].PathImage)
+	}
+	if got[0].Group != "Fiber" || got[0].Client.SiteTilt != "-0.1°" {
+		t.Fatalf("AP1 site fields: group=%q site_tilt=%q", got[0].Group, got[0].Client.SiteTilt)
+	}
+	if got[0].Performance.Status != "Good Link" {
+		t.Fatalf("AP1 performance: %q", got[0].Performance.Status)
 	}
 	if got[1].PathImage != "ya-tiene" {
 		t.Fatalf("AP2 no debe sobrescribirse: %q", got[1].PathImage)

@@ -573,6 +573,10 @@ components:
 
     RespuestaCobertura:
       type: object
+      description: |
+        Resultado por antena de POST /api/coverage/full. Incluye cobertura/SNMP
+        y el resumen de sitio de Link Path (mismos datos que CoverageLightItem,
+        repetidos en cada antena del sitio). En client, tilt se expone como site_tilt.
       properties:
         antena:
           type: string
@@ -591,6 +595,15 @@ components:
             Solo REST POST /api/coverage/full (no se incluye en la herramienta MCP get_tower_coverage).
             Imagen del perfil de enlace en base64 (campo pathimage de LinkPathAPI)
             de la torre a la que pertenece la antena; mismo valor que en CoverageLightItem.
+        group:
+          type: string
+          example: Fiber Coverages
+        tower:
+          $ref: '#/components/schemas/CoverageLightTower'
+        client:
+          $ref: '#/components/schemas/CoverageFullSiteClient'
+        performance:
+          $ref: '#/components/schemas/CoverageLightPerformance'
         clientes_conectados:
           type: integer
           nullable: true
@@ -599,6 +612,22 @@ components:
           nullable: true
         estado_capacidad:
           type: string
+
+    CoverageFullSiteClient:
+      type: object
+      description: |
+        Bloque client de /api/coverage/full. Igual que CoverageLightClient, pero
+        el tilt del sitio se serializa como site_tilt.
+      properties:
+        alignment:
+          type: string
+          example: 64.59°
+        site_tilt:
+          type: string
+          example: "-0.07°"
+        height:
+          type: string
+          example: "6"
 
     DispositivoAP:
       type: object

@@ -276,8 +276,8 @@ func (s *TowerScraper) processSingleAP(workerID int, towerURL, safeName string, 
 		Tipo:        ap.Tipo,
 		Cobertura:   false,
 		NombreTorre: torre.TowerName,
-		PathImage:   torre.PathImage,
 	}
+	respuestaBase.ApplySiteFields(torre)
 
 	beamwidth := geo.ObtenerApertura(ap.Tipo, ap.APName)
 
@@ -448,8 +448,8 @@ func (s *TowerScraper) processSingleAP(workerID int, towerURL, safeName string, 
 		Distancia:   distanciaKm,
 		Cobertura:   coberturaViable,
 		NombreTorre: torre.TowerName,
-		PathImage:   torre.PathImage,
 	}
+	out.ApplySiteFields(torre)
 
 	if coberturaViable && strings.TrimSpace(ap.IPAddress) != "" {
 		st, err := snmp.CheckSaturation(models.AccessPoint{

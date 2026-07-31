@@ -183,27 +183,34 @@ func towersToLight(torres []models.TowerCoverage) []models.CoverageLightItem {
 	return out
 }
 
-// enrichResultadosPathImage rellena path_image en cada antena desde las torres
-// cacheadas (útil para entradas previas a que RespuestaMCP incluyera el campo).
+// enrichResultadosPathImage rellena path_image y el resumen de sitio (group/tower/
+// client/performance) en cada antena desde las torres cacheadas. Los campos van
+// con json:"-" en RespuestaMCP y no persisten en Redis; en cache hit hay que
+// rehidratarlos (mismo valor para todas las antenas de un sitio).
 func enrichResultadosPathImage(resultados []models.RespuestaMCP, towers []models.CoverageLightItem) []models.RespuestaMCP {
 	if len(resultados) == 0 || len(towers) == 0 {
 		return resultados
 	}
-	byName := make(map[string]string, len(towers))
+	byName := make(map[string]models.CoverageLightItem, len(towers))
 	for _, t := range towers {
-		if img := strings.TrimSpace(t.PathImage); img != "" {
-			byName[t.TowerName] = img
-		}
+		byName[t.TowerName] = t
 	}
 	if len(byName) == 0 {
 		return resultados
 	}
 	for i := range resultados {
-		if strings.TrimSpace(resultados[i].PathImage) != "" {
+		t, ok := byName[resultados[i].NombreTorre]
+		if !ok {
 			continue
 		}
-		if img, ok := byName[resultados[i].NombreTorre]; ok {
-			resultados[i].PathImage = img
+		if strings.TrimSpace(resultados[i].PathImage) == "" {
+			resultados[i].PathImage = t.PathImage
+		}
+		if strings.TrimSpace(resultados[i].Group) == "" &&
+			strings.TrimSpace(resultados[i].Client.SiteTilt) == "" &&
+			strings.TrimSpace(resultados[i].Performance.Status) == "" {
+			resultados[i].Group, resultados[i].Tower, resultados[i].Client, resultados[i].Performance =
+				models.SiteFieldsFromLight(t)
 		}
 	}
 	return resultados
