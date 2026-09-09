@@ -133,6 +133,9 @@ Si MCP_TRANSPORT=sse, la aplicación levanta un servidor web en el puerto defini
 
     POST /api/coverage: Endpoint REST tradicional para integraciones que no son de IA.
 
+Los endpoints REST `/api/*` requieren un JWT HS256 compartido con Agenda y con
+`exp` válido; MCP no usa este JWT.
+
 ### 2. Modo Local (MCP/Stdio)
 
 Si MCP_TRANSPORT=stdio (o vacío), el servicio NO abre puertos de red. En su lugar, se comunica directamente a través de la entrada y salida estándar del sistema operativo. Esto es ideal para Agentes locales (como la app Desktop de Claude) o para debuggear con el MCP Inspector.

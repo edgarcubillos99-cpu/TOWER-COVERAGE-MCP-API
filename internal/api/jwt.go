@@ -10,18 +10,16 @@ import (
 )
 
 // errInvalidToken se devuelve cuando el JWT no es válido: firma incorrecta,
-// algoritmo inesperado o token caducado (jwt.WithExpirationRequired más abajo
-// hace que la ausencia de "exp" también se considere inválida).
+// algoritmo inesperado, token caducado o sin el claim "exp".
 var errInvalidToken = errors.New("token JWT inválido o caducado")
 
 // validateJWT verifica la firma HS256 de un JWT contra el secreto compartido
 // entre las APIs de la empresa y comprueba que no haya caducado (claim "exp").
-// No exige más claims (iss/aud) porque el secreto ya es el factor de confianza.
 func validateJWT(tokenString, secret string) error {
-	_, err := jwt.Parse(tokenString, func(t *jwt.Token) (any, error) {
+	token, err := jwt.Parse(tokenString, func(t *jwt.Token) (any, error) {
 		return []byte(secret), nil
 	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired())
-	if err != nil {
+	if err != nil || !token.Valid {
 		return errInvalidToken
 	}
 	return nil
@@ -63,7 +61,11 @@ func withJWT(jwtSecret string, next http.HandlerFunc) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, ok := bearerJWTFromRequest(r)
-		if !ok || validateJWT(token, jwtSecret) != nil {
+		if !ok {
+			writeUnauthorized(w)
+			return
+		}
+		if err := validateJWT(token, jwtSecret); err != nil {
 			writeUnauthorized(w)
 			return
 		}

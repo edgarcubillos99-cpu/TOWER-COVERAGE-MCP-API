@@ -23,7 +23,7 @@ func TestValidateJWT(t *testing.T) {
 	const secret = "shared-secret-entre-apis"
 
 	valid := signHS256(t, secret, jwt.MapClaims{
-		"sub": "otra-api",
+		"id":  1,
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
 	if err := validateJWT(valid, secret); err != nil {
@@ -37,7 +37,7 @@ func TestValidateJWT(t *testing.T) {
 		t.Error("se esperaba error para token caducado")
 	}
 
-	noExp := signHS256(t, secret, jwt.MapClaims{"sub": "otra-api"})
+	noExp := signHS256(t, secret, jwt.MapClaims{"sub": "agenda"})
 	if err := validateJWT(noExp, secret); err == nil {
 		t.Error("se esperaba error para token sin claim exp")
 	}
@@ -70,7 +70,9 @@ func TestWithJWT(t *testing.T) {
 
 	t.Run("JWT válido autentica", func(t *testing.T) {
 		h := withJWT(secret, ok)
-		token := signHS256(t, secret, jwt.MapClaims{"exp": time.Now().Add(time.Hour).Unix()})
+		token := signHS256(t, secret, jwt.MapClaims{
+			"exp": time.Now().Add(time.Hour).Unix(),
+		})
 		req := httptest.NewRequest(http.MethodGet, "/api/torres", nil)
 		req.Header.Set("Authorization", "Bearer "+token)
 		rec := httptest.NewRecorder()
@@ -91,7 +93,9 @@ func TestWithJWT(t *testing.T) {
 
 	t.Run("JWT caducado rechaza", func(t *testing.T) {
 		h := withJWT(secret, ok)
-		token := signHS256(t, secret, jwt.MapClaims{"exp": time.Now().Add(-time.Hour).Unix()})
+		token := signHS256(t, secret, jwt.MapClaims{
+			"exp": time.Now().Add(-time.Hour).Unix(),
+		})
 		req := httptest.NewRequest(http.MethodGet, "/api/torres", nil)
 		req.Header.Set("Authorization", "Bearer "+token)
 		rec := httptest.NewRecorder()
