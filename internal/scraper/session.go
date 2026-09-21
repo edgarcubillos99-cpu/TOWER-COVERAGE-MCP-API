@@ -55,8 +55,9 @@ func (s *TowerScraper) StartSessionKeeper() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for range ticker.C {
-			age := time.Since(s.sessionStarted)
-			log.Printf("Keepalive: renovando sesión TowerCoverage (antigüedad %s)...", age.Round(time.Second))
+			_, startedAt := s.sessionState()
+			log.Printf("Keepalive: renovando sesión TowerCoverage (antigüedad %s)...",
+				time.Since(startedAt).Round(time.Second))
 			if err := s.runPWExclusive(func() error {
 				s.loginMu.Lock()
 				defer s.loginMu.Unlock()
@@ -69,17 +70,15 @@ func (s *TowerScraper) StartSessionKeeper() {
 }
 
 func (s *TowerScraper) ensureSession() error {
-	if err := s.ensureBrowser(); err != nil {
+	if _, err := s.ensureBrowser(); err != nil {
 		return err
 	}
 
-	s.loginMu.Lock()
-	needsLogin := s.context == nil
 	maxAge := sessionMaxAgeFromEnv()
-	needsRenew := !needsLogin && !s.sessionStarted.IsZero() && time.Since(s.sessionStarted) >= maxAge
-	s.loginMu.Unlock()
+	hasContext, startedAt := s.sessionState()
+	needsRenew := hasContext && !startedAt.IsZero() && time.Since(startedAt) >= maxAge
 
-	if !needsLogin && !needsRenew {
+	if hasContext && !needsRenew {
 		return nil
 	}
 
@@ -87,19 +86,34 @@ func (s *TowerScraper) ensureSession() error {
 		s.loginMu.Lock()
 		defer s.loginMu.Unlock()
 
-		if s.context == nil {
+		hasContext, startedAt := s.sessionState()
+		if !hasContext {
 			log.Println("Sin contexto de navegador; iniciando sesión TowerCoverage...")
 			return s.loginUnderLock()
 		}
 
-		if !s.sessionStarted.IsZero() && time.Since(s.sessionStarted) < maxAge {
+		if !startedAt.IsZero() && time.Since(startedAt) < maxAge {
 			return nil
 		}
 
 		log.Printf("Sesión TowerCoverage antigua (%s); renovando antes de continuar...",
-			time.Since(s.sessionStarted).Round(time.Minute))
+			time.Since(startedAt).Round(time.Minute))
 		return s.loginUnderLock()
 	})
+}
+
+// sessionState lee el estado de sesión, que vive junto al navegador bajo browserMu.
+func (s *TowerScraper) sessionState() (bool, time.Time) {
+	s.browserMu.Lock()
+	defer s.browserMu.Unlock()
+	return s.context != nil, s.sessionStarted
+}
+
+// sessionContext devuelve el contexto autenticado en TowerCoverage, o nil si no hay sesión.
+func (s *TowerScraper) sessionContext() playwright.BrowserContext {
+	s.browserMu.Lock()
+	defer s.browserMu.Unlock()
+	return s.context
 }
 
 func (s *TowerScraper) renewSession() error {
@@ -116,17 +130,28 @@ func (s *TowerScraper) loginUnderLock() error {
 		return fmt.Errorf("credenciales TowerCoverage no configuradas")
 	}
 
-	if s.context != nil {
-		_ = s.context.Close()
-		s.context = nil
+	browser, err := s.ensureBrowser()
+	if err != nil {
+		return err
 	}
 
-	context, err := s.browser.NewContext()
+	s.browserMu.Lock()
+	previo := s.context
+	s.context = nil
+	s.sessionStarted = time.Time{}
+	s.browserMu.Unlock()
+	if previo != nil {
+		closeWithTimeout("contexto TowerCoverage previo", func() error { return previo.Close() })
+	}
+
+	context, err := browser.NewContext()
 	if err != nil {
 		log.Printf("[Login] fallo al crear contexto del navegador: %v", err)
 		return err
 	}
+	s.browserMu.Lock()
 	s.context = context
+	s.browserMu.Unlock()
 
 	page, err := context.NewPage()
 	if err != nil {
@@ -181,7 +206,9 @@ func (s *TowerScraper) loginUnderLock() error {
 		return fmt.Errorf("login fallido: posibles credenciales incorrectas, seguimos en la pantalla de login")
 	}
 
+	s.browserMu.Lock()
 	s.sessionStarted = time.Now()
+	s.browserMu.Unlock()
 	log.Println("Login exitoso. Sesión guardada en el contexto.")
 	return nil
 }

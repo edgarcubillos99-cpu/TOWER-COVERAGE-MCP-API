@@ -1,8 +1,10 @@
 package scraper
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -28,6 +30,33 @@ const skipRFConeWebRender = true
 
 var reNumerosAzimutAltura = regexp.MustCompile(`[^\d.]`)
 
+// errPWBusy se devuelve cuando no se consigue hueco de navegador dentro del plazo. Antes la
+// espera era indefinida, así que un cierre colgado dejaba el servicio inservible hasta reiniciar.
+var errPWBusy = errors.New("navegador ocupado: no se liberó un hueco a tiempo")
+
+const (
+	// pwSlotTimeout cubre una captura completa de Google Maps más la cola de peticiones.
+	pwSlotTimeout = 3 * time.Minute
+	// pwExclusiveTimeout acota el drenaje previo a relanzar el navegador o renovar la sesión.
+	pwExclusiveTimeout = 5 * time.Minute
+	// pwCloseTimeout evita que cerrar un Chromium ya muerto bloquee browserMu para siempre.
+	pwCloseTimeout = 15 * time.Second
+
+	defaultBrowserMaxAge  = 6 * time.Hour
+	defaultBrowserMaxUses = 200
+)
+
+// chromiumLaunchArgs endurece Chromium para vida larga dentro de un contenedor.
+// --disable-dev-shm-usage es el importante: Docker monta /dev/shm con 64 MB y al agotarse
+// el navegador empieza a morir de forma intermitente.
+var chromiumLaunchArgs = []string{
+	"--disable-dev-shm-usage",
+	"--disable-gpu",
+	"--disable-background-timer-throttling",
+	"--disable-backgrounding-occluded-windows",
+	"--disable-renderer-backgrounding",
+}
+
 type TowerScraper struct {
 	pw             *playwright.Playwright
 	browser        playwright.Browser
@@ -38,10 +67,13 @@ type TowerScraper struct {
 	apiClient      *towercoverage.Client
 	redis          *redis.Client // Redis local/Docker: GetSiteList
 	coverageRedis  *redis.Client // Redis remoto: resultados de cobertura por proximidad
+	// browserMu protege pw, browser, context, sessionStarted y los contadores de reciclado.
 	browserMu      sync.Mutex
+	browserStarted time.Time
+	browserUses    int
 	// pwLimit limita operaciones Playwright concurrentes (Google Maps, flujo legado web).
 	pwLimit *pwLimiter
-	// loginMu protege login/renovación y el reemplazo del BrowserContext.
+	// loginMu serializa el flujo de login. Orden de bloqueo: loginMu → browserMu.
 	loginMu sync.Mutex
 }
 
@@ -94,34 +126,168 @@ func (s *TowerScraper) CoverageRedis() *redis.Client {
 	return s.coverageRedis
 }
 
-func (s *TowerScraper) ensureBrowser() error {
+// ensureBrowser devuelve un Chromium vivo, relanzándolo si el anterior murió o se desconectó.
+func (s *TowerScraper) ensureBrowser() (playwright.Browser, error) {
 	s.browserMu.Lock()
 	defer s.browserMu.Unlock()
+	return s.ensureBrowserUnderLock()
+}
+
+func (s *TowerScraper) ensureBrowserUnderLock() (playwright.Browser, error) {
+	if s.browser != nil && s.browser.IsConnected() {
+		return s.browser, nil
+	}
 	if s.browser != nil {
-		return nil
+		log.Println("⚠️ Chromium ya no está conectado; se descarta y se relanza.")
+		s.stopBrowserUnderLock()
 	}
 
 	pw, err := playwright.Run()
 	if err != nil {
-		return fmt.Errorf("playwright no disponible (instala Chromium con playwright install): %w", err)
+		return nil, fmt.Errorf("playwright no disponible (instala Chromium con playwright install): %w", err)
 	}
 
 	browser, err := pw.Chromium.Launch(playwright.BrowserTypeLaunchOptions{
 		Headless: playwright.Bool(true),
+		Args:     chromiumLaunchArgs,
 	})
 	if err != nil {
-		pw.Stop()
-		return fmt.Errorf("no se pudo lanzar Chromium: %w", err)
+		closeWithTimeout("driver Playwright", pw.Stop)
+		return nil, fmt.Errorf("no se pudo lanzar Chromium: %w", err)
 	}
+
+	browser.OnDisconnected(func(playwright.Browser) {
+		log.Println("⚠️ Chromium se desconectó (cierre o caída); la siguiente operación lo relanzará.")
+	})
 
 	s.pw = pw
 	s.browser = browser
+	s.browserStarted = time.Now()
+	s.browserUses = 0
 	log.Println("Playwright/Chromium inicializado bajo demanda.")
-	return nil
+	return browser, nil
 }
 
-func (s *TowerScraper) acquirePWSlot() {
-	s.pwLimit.acquire()
+// stopBrowserUnderLock libera contexto, navegador y driver. Requiere browserMu.
+func (s *TowerScraper) stopBrowserUnderLock() {
+	if s.context != nil {
+		ctx := s.context
+		closeWithTimeout("contexto TowerCoverage", func() error { return ctx.Close() })
+		s.context = nil
+		s.sessionStarted = time.Time{}
+	}
+	if s.browser != nil {
+		browser := s.browser
+		closeWithTimeout("navegador", func() error { return browser.Close() })
+		s.browser = nil
+	}
+	if s.pw != nil {
+		pw := s.pw
+		closeWithTimeout("driver Playwright", pw.Stop)
+		s.pw = nil
+	}
+	s.browserStarted = time.Time{}
+	s.browserUses = 0
+}
+
+// restartBrowser fuerza un Chromium nuevo. Espera a que no queden operaciones en vuelo.
+func (s *TowerScraper) restartBrowser() error {
+	return s.runPWExclusive(func() error {
+		s.loginMu.Lock()
+		defer s.loginMu.Unlock()
+		s.browserMu.Lock()
+		defer s.browserMu.Unlock()
+
+		s.stopBrowserUnderLock()
+		_, err := s.ensureBrowserUnderLock()
+		return err
+	})
+}
+
+// recycleBrowserIfStale relanza Chromium cuando acumula demasiadas capturas o demasiadas horas
+// en marcha. Es el sustituto programado del reinicio manual del contenedor.
+func (s *TowerScraper) recycleBrowserIfStale() {
+	s.browserMu.Lock()
+	running := s.browser != nil
+	uses := s.browserUses
+	started := s.browserStarted
+	s.browserMu.Unlock()
+
+	if !running {
+		return
+	}
+
+	maxUses := envCount("BROWSER_MAX_USES", defaultBrowserMaxUses)
+	maxAge := envMinutes("BROWSER_MAX_AGE_MINUTES", defaultBrowserMaxAge)
+
+	var motivo string
+	switch {
+	case maxUses > 0 && uses >= maxUses:
+		motivo = fmt.Sprintf("%d operaciones acumuladas", uses)
+	case maxAge > 0 && !started.IsZero() && time.Since(started) >= maxAge:
+		motivo = fmt.Sprintf("%s en marcha", time.Since(started).Round(time.Minute))
+	default:
+		return
+	}
+
+	log.Printf("Reciclando Chromium (%s) para evitar degradación por uso prolongado...", motivo)
+	if err := s.restartBrowser(); err != nil {
+		log.Printf("⚠️ No se pudo reciclar Chromium: %v", err)
+	}
+}
+
+// noteBrowserUse cuenta operaciones para el reciclado preventivo.
+func (s *TowerScraper) noteBrowserUse() {
+	s.browserMu.Lock()
+	s.browserUses++
+	s.browserMu.Unlock()
+}
+
+func (s *TowerScraper) browserConnected() bool {
+	s.browserMu.Lock()
+	defer s.browserMu.Unlock()
+	return s.browser != nil && s.browser.IsConnected()
+}
+
+// closeWithTimeout ejecuta un cierre sin permitir que bloquee al llamador: si Chromium murió,
+// el canal de control puede no contestar nunca.
+func closeWithTimeout(what string, fn func() error) {
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			log.Printf("[Playwright] cierre de %s devolvió error: %v", what, err)
+		}
+	case <-time.After(pwCloseTimeout):
+		log.Printf("[Playwright] cierre de %s no respondió en %s; se continúa sin esperar.", what, pwCloseTimeout)
+	}
+}
+
+func envMinutes(key string, fallback time.Duration) time.Duration {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if m, err := strconv.Atoi(v); err == nil && m >= 0 {
+			return time.Duration(m) * time.Minute
+		}
+	}
+	return fallback
+}
+
+func envCount(key string, fallback int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return fallback
+}
+
+func (s *TowerScraper) acquirePWSlot() error {
+	if !s.pwLimit.acquire(pwSlotTimeout) {
+		return errPWBusy
+	}
+	return nil
 }
 
 func (s *TowerScraper) releasePWSlot() {
@@ -129,7 +295,7 @@ func (s *TowerScraper) releasePWSlot() {
 }
 
 func (s *TowerScraper) runPWExclusive(fn func() error) error {
-	return s.pwLimit.runExclusive(fn)
+	return s.pwLimit.runExclusive(pwExclusiveTimeout, fn)
 }
 
 // Login maneja la autenticación y guarda la sesión.
@@ -157,7 +323,9 @@ func (s *TowerScraper) TestAPCoverage(torre models.TowerCoverage, aps []db.APInf
 		if err := s.ensureSession(); err != nil {
 			return nil, fmt.Errorf("sesión TowerCoverage: %w", err)
 		}
-		s.acquirePWSlot()
+		if err := s.acquirePWSlot(); err != nil {
+			return nil, err
+		}
 		defer s.releasePWSlot()
 	}
 
@@ -171,7 +339,11 @@ func (s *TowerScraper) TestAPCoverage(torre models.TowerCoverage, aps []db.APInf
 	if skipRFConeWebRender {
 		log.Printf("Modo rápido: se omite Coverages + render del cono RF en web; solo trigonometría concurrente.")
 	} else {
-		page, err := s.context.NewPage()
+		sesion := s.sessionContext()
+		if sesion == nil {
+			return nil, fmt.Errorf("sin sesión TowerCoverage activa")
+		}
+		page, err := sesion.NewPage()
 		if err != nil {
 			return nil, fmt.Errorf("error creando página de validación: %v", err)
 		}
@@ -285,7 +457,13 @@ func (s *TowerScraper) processSingleAP(workerID int, towerURL, safeName string, 
 	var statusExtraido string
 
 	if !skipRFConeWebRender {
-		page, err := s.context.NewPage()
+		sesion := s.sessionContext()
+		if sesion == nil {
+			log.Printf("[Worker-%d] Sin sesión TowerCoverage para %s", workerID, ap.APName)
+			ap.Status = "Sin sesión TowerCoverage"
+			return respuestaBase
+		}
+		page, err := sesion.NewPage()
 		if err != nil {
 			log.Printf("[Worker-%d] Error creando pestaña para %s: %v", workerID, ap.APName, err)
 			ap.Status = "Error de Pestaña Playwright"
@@ -749,16 +927,9 @@ func ensureAzimuthCommitted(page playwright.Page, workerID int, apName, want str
 // Close limpia los recursos al terminar la aplicación
 func (s *TowerScraper) Close() {
 	s.browserMu.Lock()
-	defer s.browserMu.Unlock()
-	if s.context != nil {
-		s.context.Close()
-	}
-	if s.browser != nil {
-		s.browser.Close()
-	}
-	if s.pw != nil {
-		s.pw.Stop()
-	}
+	s.stopBrowserUnderLock()
+	s.browserMu.Unlock()
+
 	if s.redis != nil {
 		_ = s.redis.Close()
 	}

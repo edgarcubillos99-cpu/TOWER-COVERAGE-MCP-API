@@ -1,9 +1,11 @@
 package scraper
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/mxschmitt/playwright-go"
 )
@@ -17,23 +19,77 @@ const (
 const googleMapsUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
 
 // ScreenshotGoogleMaps abre Google Maps en la coordenada indicada y devuelve un PNG en memoria.
+// Ante un fallo reintenta una vez, relanzando Chromium si el navegador quedó inservible.
 func (s *TowerScraper) ScreenshotGoogleMaps(lat, lon string) ([]byte, error) {
-	if err := s.ensureBrowser(); err != nil {
-		return nil, err
-	}
-
-	s.acquirePWSlot()
-	defer s.releasePWSlot()
-
 	lat = strings.TrimSpace(lat)
 	lon = strings.TrimSpace(lon)
 	if lat == "" || lon == "" {
 		return nil, fmt.Errorf("lat y lon son obligatorios")
 	}
 
+	s.recycleBrowserIfStale()
+
 	log.Printf("Capturando Google Maps para Lat: %s, Lon: %s...", lat, lon)
 
-	ctx, err := s.browser.NewContext(playwright.BrowserNewContextOptions{
+	png, err := s.screenshotGoogleMapsOnce(lat, lon)
+	if err == nil {
+		log.Printf("Captura de Google Maps lista (%d bytes).", len(png))
+		return png, nil
+	}
+	if errors.Is(err, errPWBusy) {
+		return nil, err
+	}
+
+	log.Printf("⚠️ Captura de Google Maps falló: %v. Reintentando...", err)
+	if browserLooksBroken(err) || !s.browserConnected() {
+		if rerr := s.restartBrowser(); rerr != nil {
+			return nil, fmt.Errorf("captura falló (%v) y no se pudo relanzar Chromium: %w", err, rerr)
+		}
+	}
+
+	png, retryErr := s.screenshotGoogleMapsOnce(lat, lon)
+	if retryErr != nil {
+		return nil, fmt.Errorf("captura de Google Maps falló tras reintento: %w", retryErr)
+	}
+	log.Printf("Captura de Google Maps lista tras reintento (%d bytes).", len(png))
+	return png, nil
+}
+
+// browserLooksBroken distingue un Chromium caído de un fallo de contenido (mapa lento, consentimiento).
+// Solo el primero justifica relanzar el navegador.
+func browserLooksBroken(err error) bool {
+	msg := strings.ToLower(err.Error())
+	for _, marca := range []string{
+		"browser has been closed",
+		"browser closed",
+		"target closed",
+		"target page, context or browser has been closed",
+		"connection closed",
+		"websocket",
+		"broken pipe",
+		"crash",
+	} {
+		if strings.Contains(msg, marca) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *TowerScraper) screenshotGoogleMapsOnce(lat, lon string) ([]byte, error) {
+	browser, err := s.ensureBrowser()
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.acquirePWSlot(); err != nil {
+		return nil, err
+	}
+	defer s.releasePWSlot()
+
+	s.noteBrowserUse()
+
+	ctx, err := browser.NewContext(playwright.BrowserNewContextOptions{
 		Viewport: &playwright.Size{
 			Width:  googleMapsViewportW,
 			Height: googleMapsViewportH,
@@ -44,13 +100,17 @@ func (s *TowerScraper) ScreenshotGoogleMaps(lat, lon string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("no se pudo crear contexto para Google Maps: %w", err)
 	}
-	defer ctx.Close()
+	defer closeWithTimeout("contexto de Google Maps", func() error { return ctx.Close() })
+
+	if err := ctx.AddCookies(googleConsentCookies()); err != nil {
+		log.Printf("[Maps] no se pudo fijar la cookie de consentimiento: %v", err)
+	}
 
 	page, err := ctx.NewPage()
 	if err != nil {
 		return nil, fmt.Errorf("no se pudo abrir pestaña de Google Maps: %w", err)
 	}
-	defer page.Close()
+	defer closeWithTimeout("pestaña de Google Maps", func() error { return page.Close() })
 
 	mapURL := googleMapsCoordsURL(lat, lon, googleMapsZoom)
 	if _, err = page.Goto(mapURL, playwright.PageGotoOptions{
@@ -67,7 +127,8 @@ func (s *TowerScraper) ScreenshotGoogleMaps(lat, lon string) ([]byte, error) {
 		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(45000),
 	}); err != nil {
-		return nil, fmt.Errorf("el mapa de Google Maps no cargó a tiempo: %w", err)
+		// La URL final distingue un mapa lento de un muro de consentimiento o de verificación.
+		return nil, fmt.Errorf("el mapa de Google Maps no cargó a tiempo (URL final %s): %w", page.URL(), err)
 	}
 
 	enableGoogleMapsSatellite(page)
@@ -97,8 +158,26 @@ func (s *TowerScraper) ScreenshotGoogleMaps(lat, lon string) ([]byte, error) {
 		return nil, fmt.Errorf("error al capturar pantalla: %w", err)
 	}
 
-	log.Printf("Captura de Google Maps lista (%d bytes).", len(png))
 	return png, nil
+}
+
+// googleConsentCookies salta el muro de consentimiento de Google, que aparece de forma
+// intermitente en contenedores y dejaba la captura esperando un canvas que nunca llega.
+func googleConsentCookies() []playwright.OptionalCookie {
+	expires := float64(time.Now().Add(365 * 24 * time.Hour).Unix())
+	cookie := func(name, value string) playwright.OptionalCookie {
+		return playwright.OptionalCookie{
+			Name:    name,
+			Value:   value,
+			Domain:  playwright.String(".google.com"),
+			Path:    playwright.String("/"),
+			Expires: playwright.Float(expires),
+		}
+	}
+	return []playwright.OptionalCookie{
+		cookie("CONSENT", "YES+"),
+		cookie("SOCS", "CAESEwgDEgk0ODE3Nzk3MjQaAmVzIAEaBgiA_LyaBg"),
+	}
 }
 
 // googleMapsCoordsURL: /place/ + @lat,lon,zoom mantiene el pin rojo centrado en la coordenada.
