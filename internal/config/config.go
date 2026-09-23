@@ -55,6 +55,11 @@ type Config struct {
 	CoverageMaxRPS     float64
 	CoverageRateBurst  int
 	RabbitMQRateLeader bool
+	// InterMapper: export de dispositivos (solo lectura) para cruzar IPs.
+	InterMapperURL           string
+	InterMapperUser          string
+	InterMapperPassword      string
+	InterMapperTLSSkipVerify bool
 }
 
 func LoadConfig() *Config {
@@ -95,31 +100,35 @@ func LoadConfig() *Config {
 	}
 
 	return &Config{
-		Username:              username,
-		Password:              password,
-		APIAccount:            apiAccount,
-		APIKey:                apiKey,
-		AppPort:               appPort,
-		MCPAPIKey:             os.Getenv("MCP_API_KEY"),
-		JWTSecret:             os.Getenv("JWT_SECRET"),
-		SwaggerEnabled:        envBool("SWAGGER_ENABLED", true),
-		DBHost:                dbHost,
-		DBPort:                dbPort,
-		DBUser:                dbUser,
-		DBPass:                dbPass,
-		DBName:                dbName,
-		RedisAddr:             redisAddr,
-		RedisPassword:         redisPassword,
-		RedisDB:               redisDB,
-		CoverageRedisHost:     coverageRedisHost,
-		CoverageRedisPort:     coverageRedisPort,
-		CoverageRedisPassword: coverageRedisPassword,
-		CoverageRedisDB:       coverageRedisDB,
-		RabbitMQURL:           rabbitURL,
-		RabbitMQRateQueue:     rabbitRateQueue,
-		CoverageMaxRPS:        coverageMaxRPS,
-		CoverageRateBurst:     coverageRateBurst,
-		RabbitMQRateLeader:    envBool("RABBITMQ_RATE_LEADER", false),
+		Username:                 username,
+		Password:                 password,
+		APIAccount:               apiAccount,
+		APIKey:                   apiKey,
+		AppPort:                  appPort,
+		MCPAPIKey:                os.Getenv("MCP_API_KEY"),
+		JWTSecret:                os.Getenv("JWT_SECRET"),
+		SwaggerEnabled:           envBool("SWAGGER_ENABLED", true),
+		DBHost:                   dbHost,
+		DBPort:                   dbPort,
+		DBUser:                   dbUser,
+		DBPass:                   dbPass,
+		DBName:                   dbName,
+		RedisAddr:                redisAddr,
+		RedisPassword:            redisPassword,
+		RedisDB:                  redisDB,
+		CoverageRedisHost:        coverageRedisHost,
+		CoverageRedisPort:        coverageRedisPort,
+		CoverageRedisPassword:    coverageRedisPassword,
+		CoverageRedisDB:          coverageRedisDB,
+		RabbitMQURL:              rabbitURL,
+		RabbitMQRateQueue:        rabbitRateQueue,
+		CoverageMaxRPS:           coverageMaxRPS,
+		CoverageRateBurst:        coverageRateBurst,
+		RabbitMQRateLeader:       envBool("RABBITMQ_RATE_LEADER", false),
+		InterMapperURL:           strings.TrimSpace(firstEnv("INTERMAPPER_URL", "IM_URL")),
+		InterMapperUser:          strings.TrimSpace(firstEnv("INTERMAPPER_USER", "IM_USER")),
+		InterMapperPassword:      firstEnv("INTERMAPPER_PASSWORD", "IM_PASSWORD"),
+		InterMapperTLSSkipVerify: envBool("INTERMAPPER_TLS_SKIP_VERIFY", false),
 	}
 }
 

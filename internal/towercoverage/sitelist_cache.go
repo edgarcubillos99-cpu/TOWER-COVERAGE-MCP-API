@@ -166,24 +166,35 @@ func (c *Client) EnsureSiteListCache(ctx context.Context) error {
 	return c.RefreshSiteList(ctx)
 }
 
-// StartSundaySiteListRefresh lanza un goroutine que refresca GetSiteList cada domingo a las 03:00 local.
-func (c *Client) StartSundaySiteListRefresh(ctx context.Context) {
+// StartSundaySiteListRefresh lanza un goroutine que cada domingo a las 03:00 local
+// refresca GetSiteList y, si afterRefresh != nil, ejecuta ese hook a continuación
+// (p. ej. recrear dispositivos_ap con GetCoverageList + InterMapper).
+func (c *Client) StartSundaySiteListRefresh(ctx context.Context, afterRefresh func(context.Context) error) {
 	if c.SiteStore == nil {
 		return
 	}
 	go func() {
 		for {
 			wait := durationUntilNextSunday(time.Now(), 3, 0)
-			log.Printf("Próximo refresco GetSiteList (domingo 03:00) en %s", wait.Round(time.Minute))
+			if afterRefresh != nil {
+				log.Printf("Próximo refresco GetSiteList + dispositivos_ap (domingo 03:00) en %s", wait.Round(time.Minute))
+			} else {
+				log.Printf("Próximo refresco GetSiteList (domingo 03:00) en %s", wait.Round(time.Minute))
+			}
 			timer := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
 				return
 			case <-timer.C:
-				refreshCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				refreshCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 				if err := c.RefreshSiteList(refreshCtx); err != nil {
 					log.Printf("⚠️ Fallo refresco semanal GetSiteList: %v", err)
+				}
+				if afterRefresh != nil {
+					if err := afterRefresh(refreshCtx); err != nil {
+						log.Printf("⚠️ Fallo refresco semanal dispositivos_ap: %v", err)
+					}
 				}
 				cancel()
 			}

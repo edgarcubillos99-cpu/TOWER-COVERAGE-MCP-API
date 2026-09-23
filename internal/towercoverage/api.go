@@ -16,6 +16,7 @@ import (
 
 const (
 	siteListURL      = "https://api.towercoverage.com/Sites/GetSiteList"
+	coverageListURL  = "https://api.towercoverage.com/Coverage/GetCoverageList"
 	linkPathURL      = "https://api.towercoverage.com/Links/LinkPathAPI"
 	maxDistanceMiles = 6.0
 
@@ -53,33 +54,33 @@ type Site struct {
 // La API real usa claves en minúsculas (signalmargin, error, …); la doc a veces
 // muestra PascalCase (Signalmargin, Error) — aceptamos ambas.
 type LinkPathResult struct {
-	LinkID                   string `json:"linkid"`
-	LeftsiteName             string `json:"leftsite_Name"`
-	LeftsiteLatitude         string `json:"leftsite_Latitude"`
-	LeftsiteLongitude        string `json:"leftsite_Longitude"`
-	LeftsiteGroundElevation  string `json:"leftsite_groundelevation"`
-	LeftsiteAntennaHeight    string `json:"leftsite_Antennaheight"`
-	LeftsiteLinkAzimuth      string `json:"leftsite_linkazimuth"`
-	LeftsiteLinkTilt         string `json:"leftsite_linktilt"`
-	LeftsideAntennaGain      string `json:"leftside_antennagain"`
-	RightsiteName            string `json:"rightsite_Name"`
-	RightsiteLatitude        string `json:"rightsite_Latitude"`
-	RightsiteLongitude       string `json:"rightsite_Longitude"`
-	RightsiteGroundElevation string `json:"rightsite_groundelevation"`
-	RightsiteAntennaHeight   string `json:"rightsite_Antennaheight"`
-	RightsiteLinkAzimuth     string `json:"rightsite_linkazimuth"`
-	RightsiteLinkTilt        string `json:"rightsite_linktilt"`
-	RightsiteAntennaGain     string `json:"rightsite_antennagain"`
-	RxSensitivity            string `json:"rxsensitivity"`
-	SignalMargin             string `json:"-"`
-	SignalInDBm              string `json:"-"`
-	ServiceQuality           string `json:"-"`
-	Distance                 string `json:"-"`
-	MinimumAntennaHeight     string `json:"-"`
-	DiskTime                 string `json:"disktime"`
-	CalcTime                 string `json:"calcTime"`
-	PathImage                string `json:"-"`
-	MapDetails               string `json:"mapdetails"`
+	LinkID                   string  `json:"linkid"`
+	LeftsiteName             string  `json:"leftsite_Name"`
+	LeftsiteLatitude         string  `json:"leftsite_Latitude"`
+	LeftsiteLongitude        string  `json:"leftsite_Longitude"`
+	LeftsiteGroundElevation  string  `json:"leftsite_groundelevation"`
+	LeftsiteAntennaHeight    string  `json:"leftsite_Antennaheight"`
+	LeftsiteLinkAzimuth      string  `json:"leftsite_linkazimuth"`
+	LeftsiteLinkTilt         string  `json:"leftsite_linktilt"`
+	LeftsideAntennaGain      string  `json:"leftside_antennagain"`
+	RightsiteName            string  `json:"rightsite_Name"`
+	RightsiteLatitude        string  `json:"rightsite_Latitude"`
+	RightsiteLongitude       string  `json:"rightsite_Longitude"`
+	RightsiteGroundElevation string  `json:"rightsite_groundelevation"`
+	RightsiteAntennaHeight   string  `json:"rightsite_Antennaheight"`
+	RightsiteLinkAzimuth     string  `json:"rightsite_linkazimuth"`
+	RightsiteLinkTilt        string  `json:"rightsite_linktilt"`
+	RightsiteAntennaGain     string  `json:"rightsite_antennagain"`
+	RxSensitivity            string  `json:"rxsensitivity"`
+	SignalMargin             string  `json:"-"`
+	SignalInDBm              string  `json:"-"`
+	ServiceQuality           string  `json:"-"`
+	Distance                 string  `json:"-"`
+	MinimumAntennaHeight     string  `json:"-"`
+	DiskTime                 string  `json:"disktime"`
+	CalcTime                 string  `json:"calcTime"`
+	PathImage                string  `json:"-"`
+	MapDetails               string  `json:"mapdetails"`
 	Availability             *string `json:"availability"`
 	SignalWithRain           *string `json:"signalWithRain"`
 	Error                    string  `json:"-"`

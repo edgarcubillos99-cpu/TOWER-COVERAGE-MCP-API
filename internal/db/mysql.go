@@ -122,6 +122,21 @@ func (c *DBClient) query(query string, args ...any) (*sql.Rows, error) {
 	return rows, err
 }
 
+func (c *DBClient) exec(query string, args ...any) (sql.Result, error) {
+	var res sql.Result
+	var err error
+	for attempt := 0; attempt < dbQueryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(dbRetryDelay)
+		}
+		res, err = c.conn.Exec(query, args...)
+		if !isConnDeadErr(err) {
+			return res, err
+		}
+	}
+	return res, err
+}
+
 func (c *DBClient) queryRowScan(query string, args []any, dest ...any) error {
 	var err error
 	for attempt := 0; attempt < dbQueryAttempts; attempt++ {
@@ -138,18 +153,18 @@ func (c *DBClient) queryRowScan(query string, args []any, dest ...any) error {
 
 // ObtenerAPsPorTorre cruza la tabla de torres_ap con ap_info
 func (c *DBClient) ObtenerAPsPorTorre(nombreTorreTC string) ([]APInfo, error) {
-	nombreLimpio := strings.ReplaceAll(nombreTorreTC, "OSN.", "")
-	nombreLimpio = strings.TrimSpace(nombreLimpio)
+	nombreLimpio := strings.TrimSpace(strings.ReplaceAll(nombreTorreTC, "OSN.", ""))
+	nombreOrig := strings.TrimSpace(nombreTorreTC)
+	nombrePref := nombreLimpio
+	if nombrePref != "" && !strings.HasPrefix(strings.ToUpper(nombrePref), "OSN.") {
+		nombrePref = "OSN." + nombrePref
+	}
 
-	// CAMBIO 1: Reemplazar 'LIKE' por '=' en la consulta SQL
 	query := `SELECT a.ap_name, a.azimut, a.tilt, a.altura, a.tipo, a.ip_address
-          FROM dispositivos_ap a 
-          WHERE a.torre_nombre = ?`
+          FROM dispositivos_ap a
+          WHERE a.torre_nombre IN (?, ?, ?)`
 
-	// CAMBIO 2: Quitar los comodines "%" para hacer una búsqueda exacta
-	searchParam := nombreLimpio
-
-	rows, err := c.query(query, searchParam)
+	rows, err := c.query(query, nombreLimpio, nombreOrig, nombrePref)
 	if err != nil {
 		return nil, fmt.Errorf("error consultando APs: %w", err)
 	}

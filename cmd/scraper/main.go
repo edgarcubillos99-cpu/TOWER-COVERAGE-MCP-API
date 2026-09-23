@@ -11,11 +11,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
 	"tower-scraper/internal/api"
+	"tower-scraper/internal/apsync"
 	"tower-scraper/internal/config"
 	"tower-scraper/internal/coverage"
 	"tower-scraper/internal/db"
@@ -47,7 +49,32 @@ func main() {
 	if err := ts.APIClient().EnsureSiteListCache(siteCtx); err != nil {
 		log.Fatalf("Error preparando cache GetSiteList en Redis: %v", err)
 	}
-	ts.APIClient().StartSundaySiteListRefresh(siteCtx)
+
+	log.Println("Recreando dispositivos_ap (GetCoverageList + InterMapper, solo lectura)...")
+	syncCtx, syncCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	syncer := &apsync.Syncer{
+		TC: ts.APIClient(),
+		DB: dbClient,
+	}
+	if strings.TrimSpace(cfg.InterMapperURL) != "" {
+		syncer.IM = apsync.NewInterMapperClient(
+			cfg.InterMapperURL,
+			cfg.InterMapperUser,
+			cfg.InterMapperPassword,
+			cfg.InterMapperTLSSkipVerify,
+		)
+	}
+	if _, err := syncer.Run(syncCtx); err != nil {
+		syncCancel()
+		log.Fatalf("Error sincronizando dispositivos_ap: %v", err)
+	}
+	syncCancel()
+
+	ts.APIClient().StartSundaySiteListRefresh(siteCtx, func(ctx context.Context) error {
+		log.Println("Refresco semanal dispositivos_ap (GetCoverageList + InterMapper, solo lectura)...")
+		_, err := syncer.Run(ctx)
+		return err
+	})
 
 	var rateGate coverage.RateGate
 	if cfg.RabbitMQURL != "" {
