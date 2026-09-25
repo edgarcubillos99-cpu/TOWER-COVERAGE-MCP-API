@@ -27,6 +27,7 @@ type Resultado struct {
 	Insertadas         int
 	ConIP              int
 	SinIP              int
+	ConDispID          int
 	InterMapperDevices int
 }
 
@@ -66,6 +67,13 @@ func (s *Syncer) Run(ctx context.Context) (Resultado, error) {
 	} else {
 		log.Println("⚠️ INTERMAPPER_URL vacía: se recrea dispositivos_ap sin cruzar IPs")
 	}
+
+	catalog, err := s.DB.ListDispositivos()
+	if err != nil {
+		return Resultado{}, err
+	}
+	dispByNameIP := indexDispositivosByNameIP(catalog)
+	log.Printf("Tabla dispositivos: %d filas (%d con nombre+IP indexables)", len(catalog), len(dispByNameIP))
 
 	out := Resultado{
 		CoveragesTotales:   len(coverages),
@@ -112,11 +120,9 @@ func (s *Syncer) Run(ctx context.Context) (Resultado, error) {
 
 		if d, ok := MatchDevice(devices, parsed.AP); ok {
 			row.IPAddress = strings.TrimSpace(d.Address)
-			if id := strings.TrimSpace(d.ID); id != "" {
-				if n, err := strconv.Atoi(id); err == nil {
-					row.DispID = &n
-				}
-			}
+		}
+		if id, ok := lookupDispID(dispByNameIP, row.APName, row.IPAddress); ok {
+			row.DispID = &id
 		}
 
 		key := strings.ToUpper(torre) + "\x00" + strings.ToUpper(parsed.AP)
@@ -129,6 +135,9 @@ func (s *Syncer) Run(ctx context.Context) (Resultado, error) {
 		} else {
 			out.SinIP++
 		}
+		if row.DispID != nil {
+			out.ConDispID++
+		}
 		rows = append(rows, row)
 	}
 
@@ -136,7 +145,7 @@ func (s *Syncer) Run(ctx context.Context) (Resultado, error) {
 		return Resultado{}, err
 	}
 	out.Insertadas = len(rows)
-	log.Printf("dispositivos_ap recreada: %d filas (%d con IP, %d sin IP, %d OSN- , %d no parseadas)",
-		out.Insertadas, out.ConIP, out.SinIP, out.OSNProcesadas, out.ParseFail)
+	log.Printf("dispositivos_ap recreada: %d filas (%d con IP, %d sin IP, %d con disp_id, %d OSN- , %d no parseadas)",
+		out.Insertadas, out.ConIP, out.SinIP, out.ConDispID, out.OSNProcesadas, out.ParseFail)
 	return out, nil
 }
